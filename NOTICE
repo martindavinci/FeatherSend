@@ -1,0 +1,14 @@
+FeatherSend
+Copyright (c) 2026 Martin DaVinci
+Licensed under the MIT License (see LICENSE).
+
+This product includes software developed by the LocalSend project:
+
+  LocalSend core (packages/core), https://github.com/localsend/localsend
+  Copyright the LocalSend contributors
+  Licensed under the Apache License, Version 2.0 (see vendor/localsend-core/LICENSE,
+  also at https://www.apache.org/licenses/LICENSE-2.0).
+  Included unmodified in vendor/localsend-core.
+
+The FeatherSend extension TLS verifiers (crates/feathersend-core/src/ext/tls.rs) are
+adapted from the LocalSend core's certificate verifiers (Apache-2.0).

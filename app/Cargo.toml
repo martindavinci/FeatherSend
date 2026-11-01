@@ -1,0 +1,48 @@
+[package]
+name = "feathersend"
+description = "Share files, folders and the clipboard on your local network"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "FeatherSend"
+path = "src/main.rs"
+
+[dependencies]
+feathersend-core = { path = "../crates/feathersend-core" }
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+native-windows-gui = { version = "1.0.13", default-features = false, features = [
+    "list-view",
+    "tray-notification",
+    "message-window",
+    "notice",
+    "file-dialog",
+    "textbox",
+    "combobox",
+    "high-dpi",
+    "embed-resource",
+] }
+# windows-sys, not windows/windows-core: those import combase.dll from 0.62
+# on, which does not exist in that form on Windows 7.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Graphics_Gdi",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+embed-resource = "3"

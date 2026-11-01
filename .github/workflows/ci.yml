@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # VS 2022 is required: VS 2026 libraries no longer target Windows 7/8.1.
+    runs-on: windows-2022
+    env:
+      # Short target dir: build-std paths exceed MAX_PATH otherwise.
+      FS_TARGET_DIR: C:\fst
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain (pinned nightly, see rust-toolchain.toml)
+        run: rustup toolchain install nightly-2026-10-28 --profile minimal --component rust-src,rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: C:\fst
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+      - name: Windows 7 builds (x64, x86)
+        run: cargo xtask build-win7 --arch all
+      - name: No API missing on Windows 7
+        run: cargo xtask check-imports C:\fst\x86_64-win7-windows-msvc\release\FeatherSend.exe C:\fst\i686-win7-windows-msvc\release\FeatherSend.exe

@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["crates/feathersend-core", "app", "xtask"]
+exclude = ["vendor"]
+
+[workspace.package]
+version = "0.1.0"
+authors = ["Martin DaVinci"]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/martindavinci/FeatherSend"
+
+[workspace.dependencies]
+# LocalSend's official protocol core (Apache-2.0), vendored unmodified at a
+# pinned commit (see vendor/localsend-core/VENDORED.md): it is an internal
+# API, so upgrades are deliberate. Only v2 discovery + HTTP, no WebRTC.
+localsend = { path = "vendor/localsend-core", features = ["discovery", "http"] }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+
+[profile.release]
+panic = "abort"
+lto = "thin"
+codegen-units = 1
+
+# RSA key generation (first-run identity) is bignum-heavy; keep it fast in
+# debug builds and tests.
+[profile.dev.package.rsa]
+opt-level = 2
+
+[profile.dev.package.num-bigint-dig]
+opt-level = 2

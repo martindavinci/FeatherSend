@@ -1,0 +1,34 @@
+name: Nightly canary
+
+# The *-win7-windows-msvc targets are tier 3: a new nightly can break them
+# (it happened in October 2026). This tries the latest nightly every week, so
+# the pinned one in rust-toolchain.toml is only bumped to a known-good date.
+
+on:
+  schedule:
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  latest-nightly:
+    runs-on: windows-2022
+    env:
+      FS_TARGET_DIR: C:\fst
+      RUSTUP_TOOLCHAIN: nightly
+    steps:
+      - uses: actions/checkout@v4
+      - name: Latest nightly
+        run: rustup toolchain install nightly --profile minimal --component rust-src
+      - name: Windows 7 builds (x64, x86)
+        run: cargo xtask build-win7 --arch all
+      - name: No API missing on Windows 7
+        run: cargo xtask check-imports C:\fst\x86_64-win7-windows-msvc\release\FeatherSend.exe C:\fst\i686-win7-windows-msvc\release\FeatherSend.exe
+      - name: Report
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue create --title "Latest nightly breaks the Windows 7 build" --body "See ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
