@@ -250,15 +250,22 @@ fn iscc() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
+/// A release without installers must fail, not pass with only the zips.
+fn require_iscc(found: Option<PathBuf>) -> Result<PathBuf> {
+    found.ok_or_else(|| "Inno Setup 6 is required to build the installers".into())
+}
+
+/// `sha256sum -c` treats a CR as part of the file name.
+fn to_lf(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
 fn dist() -> Result<()> {
     let version = version()?;
+    let iscc = require_iscc(iscc())?;
     let dist = root().join("dist");
     let _ = std::fs::remove_dir_all(&dist);
     std::fs::create_dir_all(&dist).map_err(|e| e.to_string())?;
-    let iscc = iscc();
-    if iscc.is_none() {
-        eprintln!("warning: Inno Setup 6 not found, skipping installers");
-    }
     for arch in [Arch::X64, Arch::X86] {
         let exe = build_win7(arch)?;
         check_imports(&exe)?;
@@ -283,20 +290,21 @@ fn dist() -> Result<()> {
             stage.display(),
             zip.display()
         ))?;
-        if let Some(iscc) = &iscc {
-            run(Command::new(iscc)
-                .arg(format!("/DVersion={version}"))
-                .arg(format!("/DArch={}", arch.name()))
-                .arg(format!("/DSourceExe={}", exe.display()))
-                .arg(format!("/O{}", dist.display()))
-                .arg(root().join("installer").join("FeatherSend.iss")))?;
-        }
+        run(Command::new(&iscc)
+            .arg(format!("/DVersion={version}"))
+            .arg(format!("/DArch={}", arch.name()))
+            .arg(format!("/DSourceExe={}", exe.display()))
+            .arg(format!("/O{}", dist.display()))
+            .arg(root().join("installer").join("FeatherSend.iss")))?;
         let _ = std::fs::remove_dir_all(&stage);
     }
     powershell(&format!(
         "Get-ChildItem '{0}' -File | Where-Object Name -ne 'SHA256SUMS.txt' | ForEach-Object {{ '{{0}}  {{1}}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name }} | Set-Content -Encoding ascii '{0}\\SHA256SUMS.txt'",
         dist.display()
     ))?;
+    let sums = dist.join("SHA256SUMS.txt");
+    let text = std::fs::read_to_string(&sums).map_err(|e| e.to_string())?;
+    std::fs::write(&sums, to_lf(&text)).map_err(|e| e.to_string())?;
     println!("artifacts in {}", dist.display());
     Ok(())
 }
@@ -390,6 +398,18 @@ mod tests {
     fn clean_imports_pass() {
         let imports = vec![("kernel32.dll".to_string(), "GetSystemTimeAsFileTime".to_string())];
         assert!(violations(&imports).is_empty());
+    }
+
+    #[test]
+    fn missing_inno_setup_is_an_error() {
+        assert!(require_iscc(None).unwrap_err().contains("Inno Setup 6"));
+        let found = PathBuf::from("ISCC.exe");
+        assert_eq!(require_iscc(Some(found.clone())), Ok(found));
+    }
+
+    #[test]
+    fn checksum_file_uses_lf() {
+        assert_eq!(to_lf("aa  a.zip\r\nbb  b.exe\r\n"), "aa  a.zip\nbb  b.exe\n");
     }
 
     #[test]

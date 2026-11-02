@@ -66,7 +66,7 @@ the C++ tools (VS 2026 libraries no longer target Windows 7/8.1).
 cargo test --workspace                 # tests on the host
 cargo xtask build-win7 --arch all      # x64 + x86 builds for Windows 7+
 cargo xtask check-imports <exe>        # no API missing on Windows 7
-cargo xtask dist                       # zips, installers (Inno Setup 6), SHA256SUMS
+cargo xtask dist                       # zips, installers, SHA256SUMS (needs Inno Setup 6)
 ```
 
 ## License
