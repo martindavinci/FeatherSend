@@ -180,6 +180,8 @@ pub struct Texts {
     /// `{alias}`, `{addresses}`, `{port}`
     pub this_device: &'static str,
     pub no_network: &'static str,
+    /// `{path}`
+    pub open_folder_failed: &'static str,
     /// `{version}`
     pub update_status: &'static str,
 }

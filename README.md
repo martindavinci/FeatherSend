@@ -41,9 +41,9 @@ use the official LocalSend app: no FeatherSend app needed there.
 
 From [Releases](https://github.com/martindavinci/FeatherSend/releases):
 
-- `FeatherSend-<version>-win7-x64-setup.exe` / `-x86-setup.exe`: installer, no administrator rights
+- `FeatherSend-<version>-x64-setup.exe` / `-x86-setup.exe`: installer, no administrator rights
   needed.
-- `FeatherSend-<version>-win7-x64-portable.zip` / `-x86-portable.zip`: unzip and run; settings stay
+- `FeatherSend-<version>-x64-portable.zip` / `-x86-portable.zip`: unzip and run; settings stay
   in the `data` folder next to the exe.
 
 Windows Firewall asks the first time FeatherSend starts: allow it on private networks, and on public

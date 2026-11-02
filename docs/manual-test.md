@@ -28,7 +28,9 @@ Check on Windows 7 too: theme, icons and buttons draw through different code the
 - [ ] Display at 150 % and 200 %: layout scales, text fits the buttons, icons stay crisp.
 - [ ] Double-click: online device opens the file dialog for it; offline device shows the offline message; empty area does nothing.
 - [ ] **Open received folder** (button and tray menu) opens the download folder in Explorer, creating it if missing, also after changing it in Settings.
+- [ ] Download folder on a dead network share or removed drive: **Open received folder** leaves the window responsive and ends with an error message.
 - [ ] Clicking a "Received …" balloon opens the same folder.
+- [ ] Keyboard: Tab to **Cancel** on a running transfer and press Space: the arrow keys work on the transfers list afterwards. Same with **Pair** on the devices list.
 - [ ] Drag files from Explorer onto a device row: they go to that device, even with another one selected, and the row gets selected. A folder keeps its structure.
 - [ ] Drop on an offline row: the offline message, nothing sent.
 - [ ] Drop outside the rows (transfer list, buttons, empty part of the device list): selected online device; with none selected and one online, that one; with several online, a menu at the cursor; with none online, the message.

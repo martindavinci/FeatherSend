@@ -284,7 +284,7 @@ fn dist() -> Result<()> {
             "Settings and data are stored in the data folder next to FeatherSend.exe.\r\n",
         )
         .map_err(|e| e.to_string())?;
-        let zip = dist.join(format!("FeatherSend-{version}-win7-{}-portable.zip", arch.name()));
+        let zip = dist.join(format!("FeatherSend-{version}-{}-portable.zip", arch.name()));
         powershell(&format!(
             "Compress-Archive -Path '{}\\*' -DestinationPath '{}' -Force",
             stage.display(),

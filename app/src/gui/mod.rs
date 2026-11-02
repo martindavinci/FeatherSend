@@ -23,6 +23,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::UnboundedSender;
 use windows_sys::Win32::UI::Controls::{NM_CLICK, NM_CUSTOMDRAW};
@@ -34,6 +35,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 pub enum AppEvent {
     Ui(UiEvent),
     Update(Release),
+    OpenFolderFailed(PathBuf),
 }
 
 pub type Queue = Arc<Mutex<VecDeque<AppEvent>>>;
@@ -119,6 +121,7 @@ pub struct App {
     status: nwg::StatusBar,
     tray: nwg::TrayNotification,
     notice: nwg::Notice,
+    opening_folder: Arc<AtomicBool>,
     files_dialog: nwg::FileDialog,
     folder_dialog: nwg::FileDialog,
     settings_window: RefCell<Option<Rc<settings::SettingsWindow>>>,
@@ -518,8 +521,24 @@ impl App {
         self.window.set_focus();
     }
 
+    /// On its own thread: a dead network share would freeze the window.
     fn open_received_folder(&self) {
-        system::open_folder(&self.settings.borrow().download_dir);
+        if self.opening_folder.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let path = self.settings.borrow().download_dir.clone();
+        let busy = self.opening_folder.clone();
+        let queue = self.ctx.as_ref().expect("context").queue.clone();
+        let notice = self.notice.sender();
+        std::thread::spawn(move || {
+            let result = system::open_folder(&path);
+            busy.store(false, Ordering::Relaxed);
+            if let Err(e) = result {
+                tracing::warn!("cannot open {}: {e}", path.display());
+                queue.lock().unwrap().push_back(AppEvent::OpenFolderFailed(path));
+                notice.notice();
+            }
+        });
     }
 
     fn refresh_status(&self) {
@@ -607,6 +626,11 @@ impl App {
         self.pair.set_enabled(actions.pair);
         self.cancel.set_enabled(actions.cancel);
         self.resume.set_enabled(actions.resume);
+        let focus = ui::focused();
+        let on_transfer_button = focus == win::hwnd_of(&self.cancel.handle)
+            || focus == win::hwnd_of(&self.resume.handle);
+        let list = if on_transfer_button { &self.transfers } else { &self.devices };
+        ui::rescue_focus(win::hwnd_of(&list.handle));
     }
 
     fn tell_offline(self: &Rc<Self>, alias: &str) {
@@ -952,6 +976,11 @@ impl App {
                     self.refresh_status();
                     let text = fill(self.t().update_status, &[("version", &version)]);
                     self.balloon_then(&text, Some(BalloonClick::OpenUpdatePage));
+                }
+                AppEvent::OpenFolderFailed(path) => {
+                    let path = path.display().to_string();
+                    let text = fill(self.t().open_folder_failed, &[("path", &path)]);
+                    self.queue_prompt(Prompt::Info { text, error: true });
                 }
                 AppEvent::Ui(event) => match event {
                     UiEvent::Devices(list) => {

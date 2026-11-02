@@ -20,7 +20,12 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 #[link(name = "ole32")]
 unsafe extern "system" {
     fn CoTaskMemFree(pv: *const c_void);
+    fn CoInitializeEx(reserved: *const c_void, flags: u32) -> i32;
+    fn CoUninitialize();
 }
+
+const COINIT_APARTMENTTHREADED: u32 = 0x2;
+const COINIT_DISABLE_OLE1DDE: u32 = 0x4;
 
 pub const WINDOW_TITLE: &str = "FeatherSend";
 const MUTEX_NAME: &str = r"Local\FeatherSend.SingleInstance";
@@ -74,12 +79,15 @@ pub fn open_url(url: &str) {
 }
 
 /// Opens a folder in Explorer, creating it first if it does not exist yet.
-pub fn open_folder(path: &Path) {
+/// A dead network share can block this for a long time: not on the GUI thread.
+pub fn open_folder(path: &Path) -> std::io::Result<()> {
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
-    if let Err(e) = std::fs::create_dir_all(path) {
-        tracing::warn!("cannot create {}: {e}", path.display());
-    }
-    unsafe {
+    std::fs::create_dir_all(path)?;
+    // ShellExecute can load shell extensions, which expect COM on the thread.
+    let com = unsafe {
+        CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE)
+    };
+    let result = unsafe {
         ShellExecuteW(
             std::ptr::null_mut(),
             wide("open").as_ptr(),
@@ -87,8 +95,13 @@ pub fn open_folder(path: &Path) {
             std::ptr::null(),
             std::ptr::null(),
             SW_SHOW,
-        );
+        )
+    } as isize;
+    if com >= 0 {
+        unsafe { CoUninitialize() };
     }
+    // Documented: greater than 32 means success.
+    if result > 32 { Ok(()) } else { Err(std::io::Error::other(format!("ShellExecute: {result}"))) }
 }
 
 pub fn computer_name() -> String {
@@ -178,4 +191,18 @@ pub fn autostart_enabled() -> bool {
     };
     unsafe { RegCloseKey(key) };
     status == 0
+}
+
+#[cfg(test)]
+mod folder_tests {
+    use super::*;
+
+    #[test]
+    fn open_folder_reports_a_folder_it_cannot_create() {
+        let file = std::env::temp_dir().join(format!("fs-open-{}", std::process::id()));
+        std::fs::write(&file, b"x").unwrap();
+        let result = open_folder(&file.join("sub"));
+        std::fs::remove_file(&file).unwrap();
+        assert!(result.is_err());
+    }
 }

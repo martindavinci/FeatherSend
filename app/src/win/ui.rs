@@ -22,6 +22,7 @@ use windows_sys::Win32::UI::Controls::{
     LVM_GETHEADER, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE, LVM_SUBITEMHITTEST,
     LVS_EX_DOUBLEBUFFER, NMCUSTOMDRAW, NMHDR, NMMOUSE, SB_SETPARTS, SetWindowTheme,
 };
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetFocus, IsWindowEnabled, SetFocus};
 use windows_sys::Win32::UI::Shell::{
     DragAcceptFiles, DragFinish, DragQueryFileW, DragQueryPoint, HDROP,
 };
@@ -113,6 +114,22 @@ pub fn list_select(list: HWND, row: Option<usize>) {
     item.state = state;
     item.stateMask = mask;
     unsafe { SendMessageW(list, LVM_SETITEMSTATE, index, &item as *const LVITEMW as LPARAM) };
+}
+
+/// The focused window of this thread, if any.
+pub fn focused() -> HWND {
+    unsafe { GetFocus() }
+}
+
+/// Windows leaves the focus on a control that gets disabled, and the keyboard
+/// then does nothing until the next click. Hands the focus to `fallback`.
+pub fn rescue_focus(fallback: HWND) {
+    unsafe {
+        let focus = GetFocus();
+        if !focus.is_null() && IsWindowEnabled(focus) == 0 {
+            SetFocus(fallback);
+        }
+    }
 }
 
 /// Makes a child window accept dropped files itself: `WM_DROPFILES` then goes
@@ -314,4 +331,36 @@ unsafe fn draw_hint(list: HWND, dc: HDC, text: &str) {
 /// `lparam` must be the `LPARAM` of a status bar `NM_CLICK` notification.
 pub unsafe fn clicked_part(lparam: LPARAM) -> usize {
     unsafe { &*(lparam as *const NMMOUSE) }.dwItemSpec
+}
+
+/// nwg tests share global window classes: one at a time.
+#[cfg(test)]
+pub static NWG_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+mod focus_tests {
+    use super::*;
+
+    #[test]
+    fn a_disabled_button_hands_the_keyboard_over() {
+        let _guard = NWG_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        nwg::init().unwrap();
+        let mut window = nwg::Window::default();
+        nwg::Window::builder().flags(nwg::WindowFlags::WINDOW).build(&mut window).unwrap();
+        let mut button = nwg::Button::default();
+        nwg::Button::builder().parent(&window).build(&mut button).unwrap();
+        let mut list = nwg::ListView::default();
+        nwg::ListView::builder().parent(&window).build(&mut list).unwrap();
+        let (b, l) = (crate::win::hwnd_of(&button.handle), crate::win::hwnd_of(&list.handle));
+
+        unsafe { SetFocus(b) };
+        assert_eq!(focused(), b);
+        rescue_focus(l);
+        assert_eq!(focused(), b, "an enabled control keeps the focus");
+
+        button.set_enabled(false);
+        assert_eq!(focused(), b, "Windows leaves it on the disabled control");
+        rescue_focus(l);
+        assert_eq!(focused(), l);
+    }
 }

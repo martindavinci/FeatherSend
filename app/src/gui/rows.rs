@@ -39,14 +39,12 @@ pub fn sync(list: &nwg::ListView, rows: &[Row], selected: Option<usize>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, MutexGuard};
+    use std::sync::MutexGuard;
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::UI::Controls::{
         LVM_ENSUREVISIBLE, LVM_GETNEXTITEM, LVM_GETSELECTEDCOUNT, LVM_GETTOPINDEX, LVNI_FOCUSED,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW;
-
-    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
     struct Fixture {
         _guard: MutexGuard<'static, ()>,
@@ -56,7 +54,7 @@ mod tests {
 
     /// A real list control in a hidden window: the bugs live in its behavior.
     fn fixture() -> Fixture {
-        let guard = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = ui::NWG_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         nwg::init().unwrap();
         let mut window = nwg::Window::default();
         nwg::Window::builder()
