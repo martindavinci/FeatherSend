@@ -9,6 +9,7 @@
 //!   change (needs `cargo install cargo-about --locked --features cli`).
 //! - `vendor-localsend <commit>`: refreshes vendor/localsend-core.
 
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -242,8 +243,17 @@ fn check_imports_cmd(args: &[String]) -> Result<()> {
     args.iter().try_for_each(|a| check_imports(Path::new(a)))
 }
 
+/// Runs Windows PowerShell. In a GitHub Actions step, which runs under PowerShell
+/// 7, it would inherit a module path where its own modules are missing. Errors
+/// must stop the script: by default it goes on and still exits with success.
 fn powershell(script: &str) -> Result<()> {
-    run(Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", script]))
+    let script = format!("$ErrorActionPreference = 'Stop'; {script}");
+    run(Command::new("powershell").env_remove("PSModulePath").args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        &script,
+    ]))
 }
 
 fn iscc() -> Option<PathBuf> {
@@ -259,9 +269,31 @@ fn require_iscc(found: Option<PathBuf>) -> Result<PathBuf> {
     found.ok_or_else(|| "Inno Setup 6 is required to build the installers".into())
 }
 
-/// `sha256sum -c` treats a CR as part of the file name.
-fn to_lf(text: &str) -> String {
-    text.replace("\r\n", "\n")
+fn sha256_file(path: &Path) -> Result<String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let hasher = Sha256::new().chain_update(&bytes);
+    Ok(hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// `SHA256SUMS.txt` for the files in `dir`, in the format of `sha256sum`: with
+/// LF line ends, because `sha256sum -c` takes a CR as part of the file name.
+fn write_checksums(dir: &Path) -> Result<()> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .filter(|entry| entry.path().is_file())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name != "SHA256SUMS.txt")
+        .collect();
+    names.sort();
+    if names.is_empty() {
+        return Err(format!("nothing to hash in {}", dir.display()));
+    }
+    let mut text = String::new();
+    for name in names {
+        text.push_str(&format!("{}  {name}\n", sha256_file(&dir.join(&name))?));
+    }
+    std::fs::write(dir.join("SHA256SUMS.txt"), text).map_err(|e| e.to_string())
 }
 
 fn dist() -> Result<()> {
@@ -303,13 +335,7 @@ fn dist() -> Result<()> {
             .arg(root().join("installer").join("FeatherSend.iss")))?;
         let _ = std::fs::remove_dir_all(&stage);
     }
-    powershell(&format!(
-        "Get-ChildItem '{0}' -File | Where-Object Name -ne 'SHA256SUMS.txt' | ForEach-Object {{ '{{0}}  {{1}}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name }} | Set-Content -Encoding ascii '{0}\\SHA256SUMS.txt'",
-        dist.display()
-    ))?;
-    let sums = dist.join("SHA256SUMS.txt");
-    let text = std::fs::read_to_string(&sums).map_err(|e| e.to_string())?;
-    std::fs::write(&sums, to_lf(&text)).map_err(|e| e.to_string())?;
+    write_checksums(&dist)?;
     println!("artifacts in {}", dist.display());
     Ok(())
 }
@@ -441,8 +467,33 @@ mod tests {
     }
 
     #[test]
-    fn checksum_file_uses_lf() {
-        assert_eq!(to_lf("aa  a.zip\r\nbb  b.exe\r\n"), "aa  a.zip\nbb  b.exe\n");
+    fn checksums_in_the_format_of_sha256sum() {
+        let dir = std::env::temp_dir().join(format!("fs-sums-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("b.zip"), b"abc").unwrap();
+        std::fs::write(dir.join("a.exe"), b"").unwrap();
+        std::fs::write(dir.join("SHA256SUMS.txt"), b"old").unwrap();
+
+        write_checksums(&dir).unwrap();
+
+        let text = std::fs::read_to_string(dir.join("SHA256SUMS.txt")).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(
+            text,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  a.exe\n\
+             ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  b.zip\n"
+        );
+    }
+
+    #[test]
+    fn checksums_refuse_an_empty_folder() {
+        let dir = std::env::temp_dir().join(format!("fs-sums-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let result = write_checksums(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(result.is_err());
     }
 
     #[test]
