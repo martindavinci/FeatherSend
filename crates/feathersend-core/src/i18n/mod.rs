@@ -238,6 +238,7 @@ pub struct Texts {
     /// `{alias}`, `{addresses}`, `{port}`
     pub this_device: &'static str,
     pub no_network: &'static str,
+    pub prompt_expired: &'static str,
     /// `{path}`
     pub open_folder_failed: &'static str,
     /// `{version}`

@@ -279,3 +279,110 @@ async fn clipboard_declined_by_user() {
     let err = client(0, &b).clipboard(MIME_TEXT, b"x".to_vec()).await.unwrap_err();
     assert_eq!(err.status, 409);
 }
+
+/// A receiver that asks, and a transfer stopped after about 1 MB.
+struct Interrupted {
+    receiver: Node,
+    sender: ExtClient,
+    request: PrepareReq,
+    part: std::path::PathBuf,
+    transfer_id: String,
+    row: u64,
+    _src: tempfile::TempDir,
+}
+
+async fn interrupted_transfer() -> Interrupted {
+    let mut receiver = NodeSpec::new(1).trusting(0, false, false).start().await;
+    let src = tempfile::tempdir().unwrap();
+    let path = src.path().join("big.bin");
+    let data: Vec<u8> = (0..3_000_000u32).map(|i| (i * 7 % 251) as u8).collect();
+    std::fs::write(&path, &data).unwrap();
+    let request = PrepareReq {
+        purpose: Purpose::Files,
+        files: vec![ExtFile {
+            id: "f".into(),
+            path: "big.bin".into(),
+            size: data.len() as u64,
+            sha256: Some(hex(&sha256(&data))),
+        }],
+    };
+    let sender = client(0, &receiver);
+    let first = sender.prepare(&request).await.unwrap();
+    receiver.wait_for(|r| matches!(r, Rec::Incoming(_)).then_some(())).await;
+    let row = receiver
+        .wait_for(|r| match r {
+            Rec::Transfer(t) => Some(t.id),
+            _ => None,
+        })
+        .await;
+    let cancel = CancellationToken::new();
+    let stop = cancel.clone();
+    let result = sender
+        .upload(
+            &first.transfer_id,
+            "f",
+            0,
+            &path,
+            Arc::new(move |n| {
+                if n >= 1_000_000 {
+                    stop.cancel();
+                }
+            }),
+            cancel,
+        )
+        .await;
+    assert!(result.is_err());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let part = receiver.downloads().join("big.bin.fspart");
+    assert!(part.exists());
+    Interrupted { receiver, sender, request, part, transfer_id: first.transfer_id, row, _src: src }
+}
+
+async fn eventually_gone(path: &std::path::Path) {
+    for _ in 0..50 {
+        if !path.exists() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("{} is still there", path.display());
+}
+
+/// The same files again need a new answer from the user, and start over.
+async fn asks_again(mut t: Interrupted) {
+    let prepare = t.sender.prepare(&t.request);
+    let asked = t.receiver.wait_for(|r| matches!(r, Rec::Incoming(_)).then_some(()));
+    let (prepared, asked) =
+        tokio::join!(prepare, tokio::time::timeout(Duration::from_secs(5), asked));
+    asked.expect("the user was not asked");
+    assert_eq!(prepared.unwrap().offsets["f"], 0);
+}
+
+#[tokio::test]
+async fn receiver_cancel_withdraws_the_approval() {
+    let mut t = interrupted_transfer().await;
+    t.receiver.handle.send(Command::CancelTransfer { id: t.row });
+    t.receiver
+        .wait_for(|r| match r {
+            Rec::Transfer(v) if v.state == TransferState::Cancelled => Some(()),
+            _ => None,
+        })
+        .await;
+    eventually_gone(&t.part).await;
+    asks_again(t).await;
+}
+
+#[tokio::test]
+async fn sender_cancel_withdraws_the_approval() {
+    let t = interrupted_transfer().await;
+    t.sender.cancel(&t.transfer_id).await.unwrap();
+    eventually_gone(&t.part).await;
+    asks_again(t).await;
+}
+
+#[tokio::test]
+async fn unpair_removes_partial_data() {
+    let t = interrupted_transfer().await;
+    t.receiver.handle.send(Command::Unpair { fingerprint: identity(0).fingerprint });
+    eventually_gone(&t.part).await;
+}

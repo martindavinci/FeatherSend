@@ -54,6 +54,9 @@ const DEVICE_COLUMNS: [i32; 3] = [38, 28, 34];
 const TRANSFER_COLUMNS: [i32; 4] = [20, 34, 28, 18];
 /// Width of the status bar's update notice, in logical units.
 const UPDATE_PART_W: i32 = 330;
+/// Prompts waiting behind the one on screen. Other devices cause them, and
+/// nobody clicks through more: beyond this they count as a "no".
+const MAX_QUEUED_PROMPTS: usize = 8;
 
 enum Prompt {
     Incoming(IncomingRequest, Reply<bool>),
@@ -62,6 +65,26 @@ enum Prompt {
     Pair { alias: String, code: String, reply: Reply<bool> },
     Info { text: String, error: bool },
     About,
+}
+
+impl Prompt {
+    /// The device stopped waiting for the answer: the request timed out.
+    fn expired(&self) -> bool {
+        match self {
+            Prompt::Incoming(_, reply)
+            | Prompt::Clipboard { reply, .. }
+            | Prompt::Pair { reply, .. } => reply.is_closed(),
+            _ => false,
+        }
+    }
+}
+
+fn push_bounded<T>(queue: &mut VecDeque<T>, item: T, max: usize) -> bool {
+    if queue.len() >= max {
+        return false;
+    }
+    queue.push_back(item);
+    true
 }
 
 pub struct Context {
@@ -1064,7 +1087,9 @@ impl App {
     fn queue_prompt(self: &Rc<Self>, prompt: Prompt) {
         let deferring = {
             let mut state = self.state.borrow_mut();
-            state.prompts.push_back(prompt);
+            if !push_bounded(&mut state.prompts, prompt, MAX_QUEUED_PROMPTS) {
+                tracing::warn!("too many requests waiting for an answer: refused one");
+            }
             state.deferring
         };
         if !deferring {
@@ -1082,6 +1107,9 @@ impl App {
                     return;
                 }
                 let Some(prompt) = state.prompts.pop_front() else { return };
+                if prompt.expired() {
+                    continue;
+                }
                 state.in_prompt = true;
                 prompt
             };
@@ -1100,7 +1128,14 @@ impl App {
         nwg::modal_message(&self.window, &params) == nwg::MessageChoice::Yes
     }
 
-    fn show_prompt(&self, prompt: Prompt) {
+    /// A "yes" that comes too late must not look like it worked.
+    fn answer(self: &Rc<Self>, reply: Reply<bool>, yes: bool) {
+        if reply.send(yes).is_err() && yes {
+            self.queue_prompt(Prompt::Info { text: self.t().prompt_expired.into(), error: false });
+        }
+    }
+
+    fn show_prompt(self: &Rc<Self>, prompt: Prompt) {
         let t = self.t();
         match prompt {
             Prompt::Incoming(request, reply) => {
@@ -1119,7 +1154,8 @@ impl App {
                         ("names", &names),
                     ],
                 );
-                let _ = reply.send(self.yes_no(t.incoming_title, &text));
+                let yes = self.yes_no(t.incoming_title, &text);
+                self.answer(reply, yes);
             }
             Prompt::Text { from, text } => {
                 let shown: String = text.chars().take(600).collect();
@@ -1143,12 +1179,14 @@ impl App {
                     }
                     ClipContent::Files(_) => fill(t.clipboard_received, &[("device", &from)]),
                 };
-                let _ = reply.send(self.yes_no(t.clipboard_title, &body));
+                let yes = self.yes_no(t.clipboard_title, &body);
+                self.answer(reply, yes);
             }
             Prompt::Pair { alias, code, reply } => {
                 let body = fill(t.pair_body, &[("device", &alias), ("code", &code)]);
                 self.show_window();
-                let _ = reply.send(self.yes_no(t.pair_title, &body));
+                let yes = self.yes_no(t.pair_title, &body);
+                self.answer(reply, yes);
             }
             Prompt::Info { text, error } => {
                 if error {
@@ -1192,6 +1230,31 @@ impl Drop for App {
             hotkey::unregister(hwnd, HOTKEY_ID);
             clipboard::remove_listener(hwnd);
         }
+    }
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::*;
+    use tokio::sync::oneshot;
+
+    #[test]
+    fn a_prompt_expires_when_the_device_stops_waiting() {
+        let (reply, waiting) = oneshot::channel();
+        let prompt = Prompt::Pair { alias: "a".into(), code: "1".into(), reply };
+        assert!(!prompt.expired());
+        drop(waiting);
+        assert!(prompt.expired());
+        assert!(!Prompt::Text { from: "a".into(), text: "b".into() }.expired());
+    }
+
+    #[test]
+    fn the_queue_refuses_beyond_its_limit() {
+        let mut queue = VecDeque::new();
+        assert!(push_bounded(&mut queue, 1, 2));
+        assert!(push_bounded(&mut queue, 2, 2));
+        assert!(!push_bounded(&mut queue, 3, 2));
+        assert_eq!(queue.len(), 2);
     }
 }
 

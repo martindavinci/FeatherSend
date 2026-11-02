@@ -85,6 +85,7 @@ pub(super) const TEXTS: Texts = Texts {
     crash_message: "FeatherSend se ha cerrado por un error inesperado.\n\nLos detalles están en el registro:\n{path}",
     this_device: "Este PC: {alias} · {addresses} · puerto {port}",
     no_network: "sin red",
+    prompt_expired: "Esta solicitud ha caducado: pide al otro dispositivo que la envíe de nuevo.",
     open_folder_failed: "No se puede abrir {path}.",
     update_status: "Actualización {version} disponible: haz clic para descargar",
 };

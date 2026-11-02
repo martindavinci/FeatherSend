@@ -85,6 +85,7 @@ pub(super) const TEXTS: Texts = Texts {
     crash_message: "FeatherSend stopped because of an unexpected error.\n\nThe details are in the log file:\n{path}",
     this_device: "This PC: {alias} · {addresses} · port {port}",
     no_network: "no network",
+    prompt_expired: "This request has expired: ask the other device to send it again.",
     open_folder_failed: "Cannot open {path}.",
     update_status: "Update {version} available: click to download",
 };

@@ -5,6 +5,8 @@
 //! - `check-imports <exe>...`: fails if an exe imports an API missing on Windows 7.
 //! - `check-tag <tag>`: fails unless the tag is `v` + the workspace version.
 //! - `dist`: both builds, import check, portable zips, installers, SHA256SUMS.
+//! - `licenses`: renders packaging/THIRD-PARTY-LICENSES.txt, after a dependency
+//!   change (needs `cargo install cargo-about --locked --features cli`).
 //! - `vendor-localsend <commit>`: refreshes vendor/localsend-core.
 
 use std::path::{Path, PathBuf};
@@ -24,16 +26,18 @@ type Result<T> = std::result::Result<T, String>;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let result =
-        match args.first().map(String::as_str) {
-            Some("build-win7") => build_win7_cmd(&args[1..]).map(|_| ()),
-            Some("check-imports") => check_imports_cmd(&args[1..]),
-            Some("check-tag") => check_tag(args.get(1).map(String::as_str).unwrap_or_default()),
-            Some("dist") => dist(),
-            Some("vendor-localsend") => vendor_localsend(args.get(1).map(String::as_str)),
-            _ => Err("usage: cargo xtask build-win7|check-imports|check-tag|dist|vendor-localsend"
-                .into()),
-        };
+    let result = match args.first().map(String::as_str) {
+        Some("build-win7") => build_win7_cmd(&args[1..]).map(|_| ()),
+        Some("check-imports") => check_imports_cmd(&args[1..]),
+        Some("check-tag") => check_tag(args.get(1).map(String::as_str).unwrap_or_default()),
+        Some("dist") => dist(),
+        Some("licenses") => licenses(),
+        Some("vendor-localsend") => vendor_localsend(args.get(1).map(String::as_str)),
+        _ => Err(
+            "usage: cargo xtask build-win7|check-imports|check-tag|dist|licenses|vendor-localsend"
+                .into(),
+        ),
+    };
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -275,6 +279,7 @@ fn dist() -> Result<()> {
             (exe.clone(), "FeatherSend.exe"),
             (root().join("LICENSE"), "LICENSE.txt"),
             (root().join("NOTICE"), "NOTICE.txt"),
+            (root().join(THIRD_PARTY), "THIRD-PARTY-LICENSES.txt"),
             (root().join("README.md"), "README.md"),
         ] {
             std::fs::copy(&from, stage.join(to)).map_err(|e| format!("{}: {e}", from.display()))?;
@@ -306,6 +311,28 @@ fn dist() -> Result<()> {
     let text = std::fs::read_to_string(&sums).map_err(|e| e.to_string())?;
     std::fs::write(&sums, to_lf(&text)).map_err(|e| e.to_string())?;
     println!("artifacts in {}", dist.display());
+    Ok(())
+}
+
+/// The notices of every library in the shipped executable, kept in the
+/// repository so release builds need no extra tool.
+const THIRD_PARTY: &str = "packaging/THIRD-PARTY-LICENSES.txt";
+
+fn licenses() -> Result<()> {
+    let about = Command::new("cargo").args(["about", "--version"]).output();
+    if !about.is_ok_and(|o| o.status.success()) {
+        return Err(
+            "cargo-about is missing: cargo install cargo-about --locked --features cli".into()
+        );
+    }
+    run(Command::new("cargo").current_dir(root()).args([
+        "about",
+        "generate",
+        "packaging/about.hbs",
+        "-o",
+        THIRD_PARTY,
+    ]))?;
+    println!("wrote {THIRD_PARTY}");
     Ok(())
 }
 
@@ -347,6 +374,12 @@ fn vendor_localsend(commit: Option<&str>) -> Result<()> {
         .collect::<Vec<_>>()
         .join("\n");
     std::fs::write(dest.join("VENDORED.md"), updated + "\n").map_err(|e| e.to_string())?;
+    run(Command::new("git").current_dir(root()).args([
+        "apply",
+        "--ignore-whitespace",
+        "vendor/localsend-core.patch",
+    ]))
+    .map_err(|e| format!("our patch no longer applies, update it: {e}"))?;
     println!("vendored LocalSend core at {full}; review `git diff vendor/` and run the tests");
     Ok(())
 }
@@ -410,6 +443,17 @@ mod tests {
     #[test]
     fn checksum_file_uses_lf() {
         assert_eq!(to_lf("aa  a.zip\r\nbb  b.exe\r\n"), "aa  a.zip\nbb  b.exe\n");
+    }
+
+    #[test]
+    fn third_party_notices_cover_the_shipped_libraries() {
+        let text = std::fs::read_to_string(root().join(THIRD_PARTY)).unwrap();
+        for name in ["native-windows-gui", "ring", "rustls", "tokio", "hyper", "windows-sys"] {
+            assert!(
+                text.contains(&format!("  - {name} ")),
+                "{name} missing: run cargo xtask licenses"
+            );
+        }
     }
 
     #[test]

@@ -5,6 +5,7 @@ phone running the official LocalSend app on the same Wi-Fi.
 
 ## Start
 
+- [ ] Packages contain `THIRD-PARTY-LICENSES.txt` (zip, and the install folder).
 - [ ] Portable zip: unzip, run `FeatherSend.exe`; the firewall prompt appears; allow private networks.
 - [ ] Network profile **Public** (Settings → Network, or Network and Sharing Center on Windows 7): the prompt must also be allowed for public networks. Allowed on private only: the phone neither appears nor sees the PC; allowed on public too, or profile switched to Private: both work without restarting.
 - [ ] `data\` is created next to the exe (portable) / `%APPDATA%\FeatherSend` (installed).
@@ -62,6 +63,9 @@ Keep the phone's LocalSend open on the same Wi-Fi.
 - [ ] Phone → PC text message: the message prompt offers to copy it.
 - [ ] "Send clipboard" with text to the phone arrives as a LocalSend message.
 - [ ] Declining on the phone shows "declined" on the PC.
+- [ ] Phone → PC, a big file, Cancel on the PC mid-way: the phone reports a failure at once, and no file stays in the download folder.
+- [ ] More than 5 text messages in a minute from the phone: the next ones are refused, and no more boxes open.
+- [ ] Leave a "files incoming" box open past 2 minutes, then answer Yes: a message says the request expired.
 
 ## FeatherSend ↔ FeatherSend
 
@@ -72,6 +76,7 @@ Keep the phone's LocalSend open on the same Wi-Fi.
 - [ ] Auto-sync on: copying text on one PC appears on the other without prompts; no echo loop.
 - [ ] Auto-accept files on: no prompt for that device only.
 - [ ] Unpair on one side: the other side's clipboard pushes get refused.
+- [ ] Auto-accept off: receive a file, Cancel it mid-way on the receiver, send it again: the receiver asks again. The same after a completed file, once 10 minutes have passed.
 
 ## Settings
 

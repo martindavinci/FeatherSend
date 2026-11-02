@@ -11,6 +11,7 @@ mod localsend;
 mod netwatch;
 mod outgoing;
 mod transfers;
+mod upload;
 
 pub use devices::{DeviceClass, DeviceKind, DeviceView};
 pub use netwatch::NetworkHint;
@@ -212,6 +213,7 @@ pub(crate) struct Shared {
     pub ls_outgoing: Mutex<HashMap<String, u64>>,
     pub ext_incoming: Mutex<HashMap<String, ext_handler::ExtIncoming>>,
     pub paused: AtomicBool,
+    pub text_limit: Mutex<localsend::RateLimit>,
     pub discovery: discovery::Runner,
     /// False in tests: no multicast, no network checks.
     pub discovery_enabled: bool,
@@ -366,6 +368,7 @@ impl Backend {
             ls_outgoing: Mutex::new(HashMap::new()),
             ext_incoming: Mutex::new(HashMap::new()),
             paused: AtomicBool::new(false),
+            text_limit: Mutex::new(localsend::RateLimit::for_text_messages()),
             discovery: runner,
             discovery_enabled: cfg.discovery,
             net: Mutex::new(netwatch::NetWatch::default()),
@@ -498,7 +501,10 @@ fn handle_command(shared: &Arc<Shared>, cmd: Command) {
                 localsend::register_with(&shared, ip, port).await;
             });
         }
-        Command::CancelTransfer { id } => shared.transfers.cancel(&shared, id),
+        Command::CancelTransfer { id } => {
+            shared.transfers.cancel(&shared, id);
+            ext_handler::withdraw_cancelled(&shared, id);
+        }
         Command::ResumeTransfer { id } => {
             if let Some(job) = shared.transfers.take_resume(id) {
                 tokio::spawn(async move { outgoing::resume(&shared, id, job).await });

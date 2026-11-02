@@ -4,7 +4,7 @@
 use super::discovery::MakeConfig;
 use super::files::{self, LocalFile};
 use super::transfers::TransferState;
-use super::{IncomingRequest, SendProblem, Shared, UiEvent};
+use super::{IncomingRequest, SendProblem, Shared, UiEvent, upload};
 use crate::ext::client::ExtClient;
 use crate::identity::Identity;
 use crate::paths::{TransferFolders, long_path, sanitize_relative};
@@ -25,12 +25,12 @@ use ::localsend::model::transfer::{FileContent, FileDto, FileMetadata};
 use ::localsend::multicast::{DEFAULT_MULTICAST_GROUP, DEFAULT_PORT, MulticastDevice};
 use ::localsend::reqwest;
 use futures_util::StreamExt;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -46,6 +46,37 @@ pub(crate) struct LsSession {
     failed: usize,
     first_name: String,
     count: usize,
+    cancel: CancellationToken,
+}
+
+/// At most `max` events in a sliding window.
+pub(crate) struct RateLimit {
+    max: usize,
+    window: Duration,
+    recent: VecDeque<Instant>,
+}
+
+impl RateLimit {
+    pub fn new(max: usize, window: Duration) -> RateLimit {
+        RateLimit { max, window, recent: VecDeque::new() }
+    }
+
+    /// A text message opens a box without any approval, and anyone on the
+    /// network can send one, with a new identity each time if they like.
+    pub fn for_text_messages() -> RateLimit {
+        RateLimit::new(5, Duration::from_secs(60))
+    }
+
+    pub fn allow(&mut self, now: Instant) -> bool {
+        while self.recent.front().is_some_and(|t| now.duration_since(*t) >= self.window) {
+            self.recent.pop_front();
+        }
+        if self.recent.len() >= self.max {
+            return false;
+        }
+        self.recent.push_back(now);
+        true
+    }
 }
 
 pub(crate) async fn start_server(
@@ -67,7 +98,8 @@ pub(crate) async fn start_server(
         Some(TlsConfig { cert: id.cert_pem.clone(), private_key: id.key_pem.clone() }),
         info,
         None,
-        Some(ServerConfigV2 { pin: None, verify_checksums: true, event_tx }),
+        // Checksums are verified by `upload::save`.
+        Some(ServerConfigV2 { pin: None, verify_checksums: false, event_tx }),
         WebConfig::default(),
         stop_rx,
     )
@@ -336,6 +368,10 @@ async fn decide(
         return PrepareUploadDecisionV2::Decline;
     }
     if let Some(text) = is_text_message(files) {
+        if !paired && !shared.text_limit.lock().unwrap().allow(Instant::now()) {
+            tracing::warn!("too many text messages: refused one from {alias}");
+            return PrepareUploadDecisionV2::Decline;
+        }
         // Never the text itself: messages often carry codes or passwords.
         tracing::info!("text message from {alias} ({} characters)", text.chars().count());
         shared.emit(UiEvent::IncomingText { from: alias.to_string(), text });
@@ -375,6 +411,7 @@ async fn decide(
             failed: 0,
             first_name: names.first().map(|s| s.to_string()).unwrap_or_default(),
             count: files.len(),
+            cancel: cancel.clone(),
         },
     );
     let watcher = shared.clone();
@@ -409,9 +446,9 @@ fn receive_file(
         if placed.is_err() {
             session.failed += 1;
         }
-        placed.map(|path| (path, session.transfer))
+        placed.map(|path| (path, session.transfer, session.cancel.clone()))
     };
-    let (path, transfer) = match placed {
+    let (path, transfer, cancel) = match placed {
         Ok(placed) => placed,
         Err(e) => {
             tracing::warn!("rejected received name {:?}: {e}", file.file_name);
@@ -419,6 +456,7 @@ fn receive_file(
         }
     };
     let (progress_tx, mut progress_rx) = mpsc::channel::<u64>(16);
+    let (binary_tx, chunks) = mpsc::channel(16);
     let (result_tx, result_rx) = oneshot::channel();
     let tracker = shared.clone();
     let (session, id) = (session_id.to_string(), file_id.to_string());
@@ -436,9 +474,16 @@ fn receive_file(
     let finisher = shared.clone();
     let (session, id) = (session_id.to_string(), file_id.to_string());
     let final_path = path.clone();
+    let target = upload::Upload {
+        path: long_path(&path),
+        size: file.size,
+        sha256: file.sha256.clone(),
+        modified: file.metadata.as_ref().and_then(|m| m.modified_time()),
+        accessed: file.metadata.as_ref().and_then(|m| m.accessed_time()),
+    };
     tokio::spawn(async move {
-        let result = result_rx.await.unwrap_or_else(|_| Err("upload aborted".into()));
-        if let Err(e) = result {
+        let result = upload::save(target, chunks, progress_tx, cancel).await;
+        if let Err(e) = &result {
             tracing::warn!("receiving {} failed: {e}", final_path.display());
             let _ = tokio::fs::remove_file(long_path(&final_path)).await;
             if let Some(s) = finisher.ls_sessions.lock().unwrap().get_mut(&session) {
@@ -449,12 +494,10 @@ fn receive_file(
             s.progress.insert(id, size);
         }
         finisher.names.release(&final_path);
+        // Last: the end of the session follows this answer.
+        let _ = result_tx.send(result);
     });
-    let _ = target_tx.send(FileUploadTarget::Path {
-        path: long_path(&path),
-        result_tx,
-        progress_tx: Some(progress_tx),
-    });
+    let _ = target_tx.send(FileUploadTarget::Stream { binary_tx, result_rx });
 }
 
 fn client_for(shared: &Shared, fingerprint: &str) -> Result<LsHttpClientV2, ClientError> {
@@ -650,5 +693,20 @@ pub(crate) async fn send_text(
             problem: problem(&e),
             detail: format!("{e:#}"),
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rate_limit_allows_again_after_the_window() {
+        let mut limit = RateLimit::new(2, Duration::from_secs(60));
+        let start = Instant::now();
+        assert!(limit.allow(start));
+        assert!(limit.allow(start));
+        assert!(!limit.allow(start + Duration::from_secs(59)));
+        assert!(limit.allow(start + Duration::from_secs(60)));
     }
 }

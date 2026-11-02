@@ -256,3 +256,167 @@ async fn traversal_name_rejected() {
     assert!(!node.dir.path().join("evil.txt").exists());
     assert!(!node.downloads().parent().unwrap().join("evil.txt").exists());
 }
+
+#[tokio::test]
+async fn receiver_cancel_stops_an_upload_from_localsend() {
+    const CHUNK: usize = 1024 * 1024;
+    let mut node = NodeSpec::new(0).start().await;
+    let ident = identity(1);
+    let client =
+        LsHttpClientV2::try_new(&ident.key_pem, &ident.cert_pem, Some(node.fp.clone()), None)
+            .unwrap();
+    let request = PrepareUploadRequestDtoV2 {
+        info: register(1, ident.fingerprint.clone()),
+        files: HashMap::from([("f".to_string(), file("f", "big.bin", 32 * CHUNK as u64))]),
+    };
+    let prepared = client
+        .prepare_upload(
+            ProtocolType::Https,
+            "127.0.0.1",
+            node.port,
+            None,
+            request,
+            None,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let response = prepared.response.expect("file accepted");
+    let token = response.files["f"].clone();
+
+    let (tx, rx) = mpsc::channel(1);
+    let body = reqwest::Body::wrap_stream(FileContent::Stream(rx).into_stream());
+    let port = node.port;
+    let upload = tokio::spawn(async move {
+        client
+            .upload(
+                ProtocolType::Https,
+                "127.0.0.1",
+                port,
+                None,
+                &response.session_id,
+                "f",
+                &token,
+                body,
+                CancellationToken::new(),
+            )
+            .await
+    });
+    // Like a phone: it keeps sending, and only stops when it is cut off.
+    let feeder = tokio::spawn(async move {
+        for _ in 0..32 {
+            if tx.send(vec![1u8; CHUNK].into()).await.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    });
+    let id = node
+        .wait_for(|r| match r {
+            Rec::Transfer(t) if t.done > 0 => Some(t.id),
+            _ => None,
+        })
+        .await;
+
+    node.handle.send(Command::CancelTransfer { id });
+    node.wait_for(|r| match r {
+        Rec::Transfer(t) if t.state == TransferState::Cancelled => Some(()),
+        _ => None,
+    })
+    .await;
+
+    // It must be cut off, and nothing may stay.
+    let result = tokio::time::timeout(Duration::from_secs(10), upload).await.unwrap().unwrap();
+    feeder.abort();
+    assert!(result.is_err(), "the upload ran to completion");
+    let target = node.downloads().join("big.bin");
+    for _ in 0..50 {
+        if !target.exists() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("{} stayed after the cancel", target.display());
+}
+
+#[tokio::test]
+async fn text_messages_from_strangers_are_limited() {
+    let mut node = NodeSpec::new(0).start().await;
+    let ident = identity(1);
+    let client =
+        LsHttpClientV2::try_new(&ident.key_pem, &ident.cert_pem, Some(node.fp.clone()), None)
+            .unwrap();
+    let mut accepted = 0;
+    let mut refused = None;
+    for _ in 0..20 {
+        let mut dto = file("m", "m.txt", 5);
+        dto.preview = Some("ciao!".into());
+        let request = PrepareUploadRequestDtoV2 {
+            info: register(1, ident.fingerprint.clone()),
+            files: HashMap::from([("m".to_string(), dto)]),
+        };
+        let result = client
+            .prepare_upload(
+                ProtocolType::Https,
+                "127.0.0.1",
+                node.port,
+                None,
+                request,
+                None,
+                CancellationToken::new(),
+            )
+            .await;
+        match result {
+            Ok(_) => accepted += 1,
+            Err(e) => {
+                refused = Some(e);
+                break;
+            }
+        }
+    }
+    assert_eq!(accepted, 5);
+    assert!(matches!(refused, Some(ClientError::StatusCode(s)) if s.status == 403));
+    let mut shown = 0;
+    while shown < 5 {
+        node.wait_for(|r| matches!(r, Rec::Text(_)).then_some(())).await;
+        shown += 1;
+    }
+}
+
+#[tokio::test]
+async fn oversized_json_bodies_are_refused_without_being_kept() {
+    let oracle = identity(3);
+    let port = free_port_pair();
+    let (events_tx, mut events) = mpsc::channel(16);
+    tokio::spawn(async move { while events.recv().await.is_some() {} });
+    let (_stop_tx, stop_rx) = oneshot::channel();
+    let _server = start_with_port(
+        port,
+        None,
+        ClientInfo {
+            alias: "oracle".into(),
+            version: "2.2".into(),
+            device_model: None,
+            device_type: Some(DeviceType::Mobile),
+            token: oracle.fingerprint.clone(),
+        },
+        None,
+        Some(ServerConfigV2 { pin: None, verify_checksums: true, event_tx: events_tx }),
+        WebConfig::default(),
+        stop_rx,
+    )
+    .await
+    .unwrap();
+    let url = format!("http://127.0.0.1:{port}/api/localsend/v2/register");
+    let http = reqwest::Client::new();
+    let mut dto = register(1, "AB".into());
+    dto.protocol = ProtocolType::Http;
+    let small = serde_json::to_string(&dto).unwrap();
+    let status = http.post(&url).body(small).send().await.unwrap().status();
+    assert!(status.is_success(), "a normal request got {status}");
+
+    dto.alias = "x".repeat(17 * 1024 * 1024);
+    let big = serde_json::to_string(&dto).unwrap();
+    let status = http.post(&url).body(big).send().await.unwrap().status();
+    assert_eq!(status.as_u16(), 400);
+}

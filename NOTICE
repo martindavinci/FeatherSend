@@ -8,7 +8,11 @@ This product includes software developed by the LocalSend project:
   Copyright the LocalSend contributors
   Licensed under the Apache License, Version 2.0 (see vendor/localsend-core/LICENSE,
   also at https://www.apache.org/licenses/LICENSE-2.0).
-  Included unmodified in vendor/localsend-core.
+  Included in vendor/localsend-core, with one change: JSON request bodies are
+  limited in size (see vendor/localsend-core/VENDORED.md).
 
 The FeatherSend extension TLS verifiers (crates/feathersend-core/src/ext/tls.rs) are
 adapted from the LocalSend core's certificate verifiers (Apache-2.0).
+
+The licenses of the other libraries in this program are in
+THIRD-PARTY-LICENSES.txt.

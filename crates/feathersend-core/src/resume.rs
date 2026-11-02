@@ -10,6 +10,9 @@ use std::path::{Path, PathBuf};
 
 pub const PART_SUFFIX: &str = ".fspart";
 pub const MAX_AGE_SECS: u64 = 7 * 24 * 3600;
+/// How long a receipt lets a retry through without asking. A retry comes
+/// within minutes; the same files sent again later are a new transfer.
+pub const RECEIPT_APPROVAL_SECS: u64 = 10 * 60;
 
 pub fn transfer_key(sender_fp: &str, path: &str, size: u64) -> String {
     let material = format!("{}\0{path}\0{size}", sender_fp.to_ascii_uppercase());
@@ -32,6 +35,15 @@ pub struct Sidecar {
     /// not receive it twice.
     #[serde(default)]
     pub completed: bool,
+}
+
+impl Sidecar {
+    /// Whether the same files may arrive again without asking the user: the
+    /// approval of an interrupted transfer stands until it is cancelled (then
+    /// the sidecar is gone), the approval of a finished one soon runs out.
+    pub fn approves_retry(&self, now: u64) -> bool {
+        !self.completed || now.saturating_sub(self.updated_at) <= RECEIPT_APPROVAL_SECS
+    }
 }
 
 pub struct PartialStore {
@@ -96,6 +108,22 @@ impl PartialStore {
         let _ = std::fs::remove_file(path);
     }
 
+    /// Forgets everything received from a sender, partial data included.
+    /// Files already at their destination stay.
+    pub fn remove_sender(&self, sender_fp: &str) {
+        let Ok(entries) = std::fs::read_dir(&self.dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let from_sender = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|t| serde_json::from_str::<Sidecar>(&t).ok())
+                .is_some_and(|s| s.sender_fp.eq_ignore_ascii_case(sender_fp));
+            if from_sender && let Some(key) = path.file_stem().and_then(|s| s.to_str()) {
+                self.remove(key, true);
+            }
+        }
+    }
+
     /// Removes sidecars (and their part files) not updated for `max_age`.
     pub fn purge_older_than(&self, max_age: u64, now: u64) -> usize {
         let Ok(entries) = std::fs::read_dir(&self.dir) else { return 0 };
@@ -134,6 +162,35 @@ mod tests {
             clipboard: false,
             completed: false,
         }
+    }
+
+    #[test]
+    fn a_receipt_approves_a_retry_only_for_a_while() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = sidecar(dir.path(), 1000);
+        assert!(s.approves_retry(1000 + MAX_AGE_SECS), "an interrupted transfer stays approved");
+        s.completed = true;
+        assert!(s.approves_retry(1000 + RECEIPT_APPROVAL_SECS));
+        assert!(!s.approves_retry(1001 + RECEIPT_APPROVAL_SECS));
+    }
+
+    #[test]
+    fn remove_sender_keeps_other_senders() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = PartialStore::new(dir.path());
+        let mine = sidecar(dir.path(), 1);
+        std::fs::write(&mine.part_path, b"1234").unwrap();
+        store.create("mine", &mine).unwrap();
+        let other_part = dir.path().join("other.fspart");
+        std::fs::write(&other_part, b"1").unwrap();
+        let other = Sidecar { sender_fp: "BB".into(), part_path: other_part, ..mine.clone() };
+        store.create("other", &other).unwrap();
+
+        store.remove_sender("aa");
+
+        assert_eq!(store.find("mine"), None);
+        assert!(!mine.part_path.exists());
+        assert!(store.find("other").is_some());
     }
 
     #[test]

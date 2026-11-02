@@ -85,6 +85,7 @@ pub(super) const TEXTS: Texts = Texts {
     crash_message: "予期しないエラーのため FeatherSend を終了しました。\n\n詳細はログ ファイルにあります:\n{path}",
     this_device: "この PC: {alias} · {addresses} · ポート {port}",
     no_network: "ネットワークなし",
+    prompt_expired: "この要求は期限切れです。相手のデバイスからもう一度送信してもらってください。",
     open_folder_failed: "{path} を開けません。",
     update_status: "更新 {version} があります: クリックしてダウンロード",
 };

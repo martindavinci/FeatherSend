@@ -85,6 +85,7 @@ pub(super) const TEXTS: Texts = Texts {
     crash_message: "예기치 않은 오류로 FeatherSend가 종료되었습니다.\n\n자세한 내용은 로그 파일을 참조하세요:\n{path}",
     this_device: "이 PC: {alias} · {addresses} · 포트 {port}",
     no_network: "네트워크 없음",
+    prompt_expired: "이 요청은 만료되었습니다. 다른 장치에서 다시 보내도록 요청하세요.",
     open_folder_failed: "{path}을(를) 열 수 없습니다.",
     update_status: "업데이트 {version} 사용 가능: 클릭하여 다운로드",
 };

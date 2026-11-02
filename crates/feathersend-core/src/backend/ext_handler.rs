@@ -64,8 +64,32 @@ fn pair_error(e: PairError) -> ExtError {
     }
 }
 
-/// Stops and forgets every incoming extension transfer from `fingerprint`
-/// (used on unpair). Partial data stays for the purge.
+/// Withdraws the approval of a cancelled transfer: without partial data and
+/// receipts, the same files need a new answer from the user. Files already at
+/// their destination stay.
+fn forget_files(shared: &Shared, t: &ExtIncoming) {
+    for f in t.files.values() {
+        shared.partial.remove(&f.key, !f.done);
+        if !f.done {
+            shared.names.release(&f.final_path);
+        }
+    }
+}
+
+/// The receiver's user cancelled transfer row `transfer`.
+pub(crate) fn withdraw_cancelled(shared: &Shared, transfer: u64) {
+    let removed = {
+        let mut incoming = shared.ext_incoming.lock().unwrap();
+        let id = incoming.iter().find(|(_, t)| t.transfer == transfer).map(|(id, _)| id.clone());
+        id.and_then(|id| incoming.remove(&id))
+    };
+    if let Some(t) = removed {
+        forget_files(shared, &t);
+    }
+}
+
+/// Stops and forgets every incoming extension transfer from `fingerprint`,
+/// with all its data (used on unpair).
 pub(crate) fn drop_peer_transfers(shared: &Shared, fingerprint: &str) {
     let removed: Vec<ExtIncoming> = {
         let mut incoming = shared.ext_incoming.lock().unwrap();
@@ -78,8 +102,10 @@ pub(crate) fn drop_peer_transfers(shared: &Shared, fingerprint: &str) {
     };
     for t in removed {
         t.cancel.cancel();
+        forget_files(shared, &t);
         shared.transfers.set_state(shared, t.transfer, TransferState::Cancelled);
     }
+    shared.partial.remove_sender(fingerprint);
 }
 
 /// Clears the upload lease of a file when the PUT ends, however it ends.
@@ -149,7 +175,8 @@ impl Handler {
         }
         // Partial or completed data from an earlier attempt counts only for
         // the same content (checksum) and the same purpose: that is what the
-        // user accepted then.
+        // user accepted then. Cancelling removes it (see `forget_files`).
+        let now = unix_now();
         let existing: Vec<Option<(Sidecar, u64)>> = keyed
             .iter()
             .map(|(f, key)| {
@@ -157,6 +184,7 @@ impl Handler {
                     f.sha256.is_some()
                         && sidecar.sha256 == f.sha256
                         && sidecar.clipboard == clipboard
+                        && sidecar.approves_retry(now)
                 })
             })
             .collect();
@@ -680,6 +708,7 @@ impl ExtHandler for Handler {
             if let Some(t) = t {
                 // Stop running uploads before forgetting the transfer.
                 t.cancel.cancel();
+                forget_files(&self.0, &t);
                 self.0.transfers.set_state(&self.0, t.transfer, TransferState::Cancelled);
             }
             Ok(())

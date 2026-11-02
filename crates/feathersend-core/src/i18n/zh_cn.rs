@@ -85,6 +85,7 @@ pub(super) const TEXTS: Texts = Texts {
     crash_message: "FeatherSend 因意外错误而关闭。\n\n详细信息位于日志文件:\n{path}",
     this_device: "此电脑:{alias} · {addresses} · 端口 {port}",
     no_network: "无网络",
+    prompt_expired: "此请求已过期:请让另一台设备重新发送。",
     open_folder_failed: "无法打开 {path}。",
     update_status: "有可用更新 {version}:点击下载",
 };

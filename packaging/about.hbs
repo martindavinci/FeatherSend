@@ -1,0 +1,21 @@
+FeatherSend — third-party licenses
+==================================
+
+FeatherSend is built from these open-source libraries. Their licenses
+follow, each with the libraries it covers.
+
+{{#each overview}}
+- {{{name}}} ({{count}})
+{{/each}}
+
+{{#each licenses}}
+------------------------------------------------------------------------
+{{{name}}}
+Used by:
+{{#each used_by}}
+  - {{crate.name}} {{crate.version}}{{#if crate.repository}} ({{crate.repository}}){{/if}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

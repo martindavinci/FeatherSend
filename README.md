@@ -74,4 +74,5 @@ cargo xtask dist                       # zips, installers, SHA256SUMS (needs Inn
 ## License
 
 MIT, see [LICENSE](LICENSE). FeatherSend includes the LocalSend core (Apache-2.0), see
-[NOTICE](NOTICE).
+[NOTICE](NOTICE). The other libraries and their licenses are in
+[THIRD-PARTY-LICENSES.txt](packaging/THIRD-PARTY-LICENSES.txt).
