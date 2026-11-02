@@ -1,6 +1,7 @@
 //! Interop with LocalSend devices through LocalSend's own core: the v2
 //! server (receive), discovery, and the v2 client (send files and text).
 
+use super::discovery::MakeConfig;
 use super::files::{self, LocalFile};
 use super::transfers::TransferState;
 use super::{IncomingRequest, SendProblem, Shared, UiEvent};
@@ -9,7 +10,7 @@ use crate::identity::Identity;
 use crate::paths::{TransferFolders, long_path, sanitize_relative};
 use crate::settings::{Settings, extension_port};
 use ::localsend::discovery::{
-    DEFAULT_DISCOVERY_TIMEOUT, DeviceIdentity, DiscoveryConfig, DiscoveryEvent, DiscoveryHandle,
+    DEFAULT_DISCOVERY_TIMEOUT, DeviceIdentity, DiscoveryConfig, DiscoveryEvent,
 };
 use ::localsend::http::client::ClientError;
 use ::localsend::http::client::LsHttpClientV2;
@@ -23,7 +24,6 @@ use ::localsend::model::discovery::{DeviceType, PROTOCOL_VERSION_V2, ProtocolTyp
 use ::localsend::model::transfer::{FileContent, FileDto, FileMetadata};
 use ::localsend::multicast::{DEFAULT_MULTICAST_GROUP, DEFAULT_PORT, MulticastDevice};
 use ::localsend::reqwest;
-use ::localsend::util::interface::{InterfaceFilter, local_interface_addresses};
 use futures_util::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
@@ -87,50 +87,42 @@ fn register_dto(shared: &Shared) -> RegisterDtoV2 {
     }
 }
 
-pub(crate) async fn start_discovery(
-    shared: &Arc<Shared>,
+/// The core's discovery configuration, for every (re)start.
+pub(crate) fn discovery_config(
+    alias: &str,
+    id: &Identity,
+    ls_port: u16,
     event_tx: mpsc::Sender<DiscoveryEvent>,
-    stop_rx: oneshot::Receiver<()>,
-) -> Arc<DiscoveryHandle> {
-    let config = DiscoveryConfig {
+) -> MakeConfig {
+    let device = MulticastDevice {
+        alias: alias.to_string(),
+        version: PROTOCOL_VERSION_V2.into(),
+        device_model: Some("Windows".into()),
+        device_type: Some(DeviceType::Desktop),
+        fingerprint: id.fingerprint.clone(),
+        port: ls_port,
+        protocol: ProtocolType::Https,
+        download: false,
+    };
+    let identity =
+        DeviceIdentity { cert_pem: id.cert_pem.clone(), private_key_pem: id.key_pem.clone() };
+    Box::new(move |interface_filter| DiscoveryConfig {
         group: DEFAULT_MULTICAST_GROUP,
         group_v6: None,
         port: DEFAULT_PORT,
-        interface_filter: InterfaceFilter::default(),
-        device: MulticastDevice {
-            alias: shared.alias(),
-            version: PROTOCOL_VERSION_V2.into(),
-            device_model: Some("Windows".into()),
-            device_type: Some(DeviceType::Desktop),
-            fingerprint: shared.identity.fingerprint.clone(),
-            port: shared.ls_port,
-            protocol: ProtocolType::Https,
-            download: false,
-        },
-        identity: DeviceIdentity {
-            cert_pem: shared.identity.cert_pem.clone(),
-            private_key_pem: shared.identity.key_pem.clone(),
-        },
+        interface_filter,
+        device: device.clone(),
+        identity: identity.clone(),
         timeout: DEFAULT_DISCOVERY_TIMEOUT,
-        event_tx: Some(event_tx),
-    };
-    let handle = Arc::new(::localsend::discovery::start(config, stop_rx).await);
-    if let Some(e) = handle.multicast_error() {
-        tracing::warn!("multicast unavailable, HTTP discovery only: {e:#}");
-    }
-    let _ = shared.discovery.set(handle.clone());
-    let shared = shared.clone();
-    tokio::spawn(async move { rescan(&shared).await });
-    handle
+        event_tx: Some(event_tx.clone()),
+    })
 }
 
+/// Announces, then scans the /24 subnets of the usable interfaces when
+/// nobody answered within a second.
 pub(crate) async fn rescan(shared: &Shared) {
-    let Some(discovery) = shared.discovery.get().cloned() else { return };
-    let ips = tokio::task::spawn_blocking(|| {
-        local_interface_addresses(&InterfaceFilter::default()).unwrap_or_default()
-    })
-    .await
-    .unwrap_or_default();
+    let Some(discovery) = shared.discovery.current() else { return };
+    let ips = shared.net.lock().unwrap().addresses().0;
     if let Err(e) = discovery
         .discover_staged(Vec::new(), ips, DEFAULT_PORT, ProtocolType::Https, Duration::from_secs(1))
         .await
@@ -206,7 +198,10 @@ pub(crate) fn handle_discovery_event(shared: &Arc<Shared>, event: DiscoveryEvent
                 http.protocol == ProtocolType::Https,
             );
         }
-        DiscoveryEvent::MulticastFailed => tracing::warn!("multicast stopped working"),
+        DiscoveryEvent::MulticastFailed => {
+            tracing::warn!("multicast stopped working");
+            super::discovery::hint(shared, "multicast failed");
+        }
     }
 }
 
@@ -341,6 +336,8 @@ async fn decide(
         return PrepareUploadDecisionV2::Decline;
     }
     if let Some(text) = is_text_message(files) {
+        // Never the text itself: messages often carry codes or passwords.
+        tracing::info!("text message from {alias} ({} characters)", text.chars().count());
         shared.emit(UiEvent::IncomingText { from: alias.to_string(), text });
         return PrepareUploadDecisionV2::Accept(HashSet::new());
     }

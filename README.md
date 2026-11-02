@@ -25,7 +25,7 @@ use the official LocalSend app: no FeatherSend app needed there.
 ## Features
 
 - **Files and folders** to any FeatherSend or LocalSend device on the same network. Folders keep
-  their structure. Drop files on the window to send them to the selected device.
+  their structure. Drop files on a device in the list to send them there.
 - **Pairing** between FeatherSend devices: both screens show the same 6-digit code and both
   users confirm it. Paired devices are recognised by their certificate, never by name or address.
 - **Clipboard**: text, images and copied files. Send it with **Ctrl+Alt+C** (configurable) or the
@@ -46,9 +46,11 @@ From [Releases](https://github.com/martindavinci/FeatherSend/releases):
 - `FeatherSend-<version>-win7-x64-portable.zip` / `-x86-portable.zip`: unzip and run; settings stay
   in the `data` folder next to the exe.
 
-Windows Firewall asks the first time FeatherSend starts: allow it on private networks. If devices
-do not see each other, make sure the network is set as private and the router does not isolate
-Wi-Fi clients (AP isolation); you can also add a device with **Add by IP…**.
+Windows Firewall asks the first time FeatherSend starts: allow it on private networks, and on public
+ones too if your Wi-Fi is set as public (Windows often does that). If devices do not see each other,
+check that network profile and that the router does not isolate Wi-Fi clients (AP isolation); you can
+also add a device with **Add by IP…**, using the address shown at the bottom of the other device's
+window.
 
 ## Privacy
 

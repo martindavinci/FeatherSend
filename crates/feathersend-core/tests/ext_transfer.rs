@@ -191,6 +191,38 @@ async fn retry_skips_completed_files_and_keeps_folder() {
     assert_eq!(names, ["Dir/a.txt", "Dir/b.bin"], "no duplicate, same folder");
 }
 
+/// A cancel races with the upload it interrupts: the receiver must hear about
+/// it whichever side of the race wins, so this runs several times.
+#[tokio::test]
+async fn cancel_always_reaches_the_receiver() {
+    let mut a = NodeSpec::new(0).trusting(1, false, false).start().await;
+    let mut b = NodeSpec::new(1).trusting(0, true, false).start().await;
+    a.add(&b, true).await;
+    let src = tempfile::tempdir().unwrap();
+    let source = src.path().join("source.bin");
+    std::fs::write(&source, vec![3u8; 32 * 1024 * 1024]).unwrap();
+    for trial in 0..6 {
+        let path = src.path().join(format!("big{trial}.bin"));
+        std::fs::hard_link(&source, &path).unwrap();
+        a.handle.send(Command::SendFiles { device: b.fp.clone(), paths: vec![path] });
+        let id = a
+            .wait_for(|r| match r {
+                Rec::Transfer(t) if t.done > 0 && !t.state.is_final() => Some(t.id),
+                _ => None,
+            })
+            .await;
+        a.handle.send(Command::CancelTransfer { id });
+        let told = b.wait_for(|r| match r {
+            Rec::Transfer(t) if t.state == TransferState::Cancelled => Some(()),
+            Rec::Transfer(t) if t.state == TransferState::Done => panic!("trial {trial}: {t:?}"),
+            _ => None,
+        });
+        tokio::time::timeout(Duration::from_secs(5), told)
+            .await
+            .unwrap_or_else(|_| panic!("trial {trial}: the receiver was not told"));
+    }
+}
+
 #[tokio::test]
 async fn hash_mismatch_fails_file() {
     let b = NodeSpec::new(1).trusting(0, true, false).start().await;

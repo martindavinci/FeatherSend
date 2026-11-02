@@ -76,17 +76,15 @@ pub fn format_size(bytes: u64) -> String {
 /// Every text the interface shows. Placeholders are `{name}`.
 pub struct Texts {
     pub devices: &'static str,
+    pub empty_devices: &'static str,
+    pub empty_transfers: &'static str,
     pub col_name: &'static str,
     pub col_address: &'static str,
-    pub col_type: &'static str,
     pub col_status: &'static str,
     pub status_paired: &'static str,
     pub status_feathersend: &'static str,
     pub status_localsend: &'static str,
     pub status_offline: &'static str,
-    pub type_mobile: &'static str,
-    pub type_desktop: &'static str,
-    pub type_other: &'static str,
     pub send_files: &'static str,
     pub send_folder: &'static str,
     pub send_clipboard: &'static str,
@@ -102,6 +100,7 @@ pub struct Texts {
     pub col_state: &'static str,
     pub cancel: &'static str,
     pub resume: &'static str,
+    pub open_received: &'static str,
     pub state_waiting: &'static str,
     pub state_running: &'static str,
     pub state_done: &'static str,
@@ -141,6 +140,7 @@ pub struct Texts {
     pub unpair_confirm: &'static str,
     pub select_device: &'static str,
     pub no_devices_online: &'static str,
+    pub none_online: &'static str,
     pub add_ip_prompt: &'static str,
     pub invalid_ip: &'static str,
     /// `{item}`, `{device}`
@@ -175,6 +175,13 @@ pub struct Texts {
     /// `{version}`
     pub about_body: &'static str,
     pub ok: &'static str,
+    /// `{path}`
+    pub crash_message: &'static str,
+    /// `{alias}`, `{addresses}`, `{port}`
+    pub this_device: &'static str,
+    pub no_network: &'static str,
+    /// `{version}`
+    pub update_status: &'static str,
 }
 
 #[cfg(test)]
@@ -231,6 +238,9 @@ mod tests {
             (en.port_in_use, it.port_in_use),
             (en.about_body, it.about_body),
             (en.update_available, it.update_available),
+            (en.crash_message, it.crash_message),
+            (en.this_device, it.this_device),
+            (en.update_status, it.update_status),
         ] {
             assert_eq!(placeholders(a), placeholders(b), "{a}");
         }

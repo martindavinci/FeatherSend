@@ -24,6 +24,7 @@ pub enum Answer {
 #[derive(Clone, Debug)]
 pub enum Rec {
     Devices(Vec<DeviceView>),
+    Identity(IdentityView),
     Transfer(TransferView),
     Text(String),
     Clipboard(ClipContent),
@@ -169,6 +170,7 @@ impl NodeSpec {
             };
             let rec = match event {
                 UiEvent::Devices(list) => Rec::Devices(list),
+                UiEvent::Identity(view) => Rec::Identity(view),
                 UiEvent::Transfer(view) => Rec::Transfer(view),
                 UiEvent::IncomingText { text, .. } => Rec::Text(text),
                 UiEvent::ClipboardReceived { content, .. } => Rec::Clipboard(content),

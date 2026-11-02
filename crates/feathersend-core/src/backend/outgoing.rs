@@ -288,19 +288,16 @@ async fn run_extension(shared: &Arc<Shared>, transfer: u64, job: ResumeJob) {
     let current = std::sync::Mutex::new(None::<String>);
     loop {
         let result = tokio::select! {
-            r = attempt_extension(shared, transfer, &job, &hashes, &current) => r,
+            biased;
             _ = cancel.cancelled() => {
-                // Tell the receiver, so it stops and forgets the transfer.
-                let remote = current.lock().unwrap().take();
-                if let (Some(id), Some(entry)) = (remote, lookup(shared, &job.device))
-                    && let Ok(client) =
-                        ext_client(shared, &job.device, &entry, Some(Duration::from_secs(5)))
-                {
-                    let _ = client.cancel(&id).await;
-                }
-                return;
+                return tell_receiver_cancelled(shared, &job.device, &current).await;
             }
+            r = attempt_extension(shared, transfer, &job, &hashes, &current) => r,
         };
+        // The cancel can also land inside the attempt, which then fails with it.
+        if result.is_err() && cancel.is_cancelled() {
+            return tell_receiver_cancelled(shared, &job.device, &current).await;
+        }
         let alias = lookup(shared, &job.device).map(|e| e.alias).unwrap_or_default();
         match result {
             Ok(finish) if finish.failed.is_empty() => {
@@ -329,10 +326,26 @@ async fn run_extension(shared: &Arc<Shared>, transfer: u64, job: ResumeJob) {
                 attempt += 1;
                 tokio::select! {
                     _ = tokio::time::sleep(*delay) => {}
-                    _ = cancel.cancelled() => return,
+                    _ = cancel.cancelled() => {
+                        return tell_receiver_cancelled(shared, &job.device, &current).await;
+                    }
                 }
             }
         }
+    }
+}
+
+/// Tells the receiver, so it stops and forgets the transfer.
+async fn tell_receiver_cancelled(
+    shared: &Arc<Shared>,
+    device: &str,
+    current: &std::sync::Mutex<Option<String>>,
+) {
+    let remote = current.lock().unwrap().take();
+    if let (Some(id), Some(entry)) = (remote, lookup(shared, device))
+        && let Ok(client) = ext_client(shared, device, &entry, Some(Duration::from_secs(5)))
+    {
+        let _ = client.cancel(&id).await;
     }
 }
 

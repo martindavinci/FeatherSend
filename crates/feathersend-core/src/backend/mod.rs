@@ -4,13 +4,16 @@
 //! anything that needs the user's decision carries a [`Reply`].
 
 mod devices;
+mod discovery;
 mod ext_handler;
 mod files;
 mod localsend;
+mod netwatch;
 mod outgoing;
 mod transfers;
 
 pub use devices::{DeviceClass, DeviceKind, DeviceView};
+pub use netwatch::NetworkHint;
 pub use transfers::{TransferState, TransferView};
 
 use crate::clip::ClipContent;
@@ -21,12 +24,11 @@ use crate::paths::NameReservations;
 use crate::resume::{MAX_AGE_SECS, PartialStore};
 use crate::settings::{DataDirs, Settings, extension_port};
 use crate::trust::TrustStore;
-use ::localsend::discovery::DiscoveryHandle;
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
@@ -77,6 +79,8 @@ pub enum Command {
     SetPaused(bool),
     ApplySettings(Settings),
     Rescan,
+    /// Windows reported a network change: rebind discovery once it settles.
+    NetworkChanged(NetworkHint),
 }
 
 /// A pending incoming transfer, for the approval prompt.
@@ -107,8 +111,22 @@ pub enum SendProblem {
     Other,
 }
 
+/// How other devices reach this one ("Add by IP" on the other side).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IdentityView {
+    pub alias: String,
+    /// IPv4 addresses of the interfaces that are up, default route first.
+    pub addresses: Vec<Ipv4Addr>,
+    /// `addresses[0]` is the default-route interface's address.
+    pub primary: bool,
+    /// The LocalSend port (the extension port is this + 1).
+    pub port: u16,
+}
+
 pub enum UiEvent {
     Devices(Vec<DeviceView>),
+    /// This device's name, addresses and port (at start and on changes).
+    Identity(IdentityView),
     IncomingTransfer {
         request: IncomingRequest,
         reply: Reply<bool>,
@@ -194,7 +212,12 @@ pub(crate) struct Shared {
     pub ls_outgoing: Mutex<HashMap<String, u64>>,
     pub ext_incoming: Mutex<HashMap<String, ext_handler::ExtIncoming>>,
     pub paused: AtomicBool,
-    pub discovery: OnceLock<Arc<DiscoveryHandle>>,
+    pub discovery: discovery::Runner,
+    /// False in tests: no multicast, no network checks.
+    pub discovery_enabled: bool,
+    pub net: Mutex<netwatch::NetWatch>,
+    /// A network check is running.
+    pub net_busy: AtomicBool,
 }
 
 impl Shared {
@@ -219,6 +242,36 @@ impl Shared {
         let views = self.devices.lock().unwrap().views(&trust);
         drop(trust);
         self.emit(UiEvent::Devices(views));
+    }
+
+    pub fn emit_identity(&self) {
+        let (addrs, primary) = self.net.lock().unwrap().addresses();
+        let addresses = netwatch::ordered(&addrs, primary);
+        let primary = primary.is_some() && addresses.first() == primary.as_ref();
+        self.emit(UiEvent::Identity(IdentityView {
+            alias: self.alias(),
+            addresses,
+            primary,
+            port: self.ls_port,
+        }));
+    }
+
+    /// Reads the interfaces, records them and returns the decision (the
+    /// enumeration blocks, so it runs on the blocking pool).
+    pub async fn poll_network(&self) -> (Vec<netwatch::NetIf>, netwatch::Decision) {
+        let (ifs, primary) =
+            tokio::task::spawn_blocking(|| (netwatch::snapshot(), netwatch::primary_ipv4()))
+                .await
+                .unwrap_or_default();
+        let decision = self.net.lock().unwrap().poll(
+            netwatch::usable(&ifs),
+            primary,
+            std::time::Instant::now(),
+        );
+        if decision.changed {
+            self.emit_identity();
+        }
+        (ifs, decision)
     }
 
     /// Asks the user through `make_event` and waits at most the decision
@@ -286,6 +339,14 @@ impl Backend {
         let ls_port = ls_server.port();
         let ls_server = Arc::new(ls_server);
 
+        let (discovery_tx, discovery_rx) = mpsc::channel(64);
+        let runner = discovery::Runner::new(localsend::discovery_config(
+            &cfg.settings.alias,
+            &cfg.identity,
+            ls_port,
+            discovery_tx,
+        ));
+
         let shared = Arc::new(Shared {
             identity: cfg.identity.clone(),
             settings: Mutex::new(cfg.settings.clone()),
@@ -305,7 +366,10 @@ impl Backend {
             ls_outgoing: Mutex::new(HashMap::new()),
             ext_incoming: Mutex::new(HashMap::new()),
             paused: AtomicBool::new(false),
-            discovery: OnceLock::new(),
+            discovery: runner,
+            discovery_enabled: cfg.discovery,
+            net: Mutex::new(netwatch::NetWatch::default()),
+            net_busy: AtomicBool::new(false),
         });
 
         let ext_server = match ExtServer::start(
@@ -323,15 +387,13 @@ impl Backend {
             }
         };
 
-        let (discovery_tx, discovery_rx) = mpsc::channel(64);
-        let discovery_stop = if cfg.discovery {
-            let (stop_tx, stop_rx) = oneshot::channel();
-            localsend::start_discovery(&shared, discovery_tx, stop_rx).await;
-            Some(stop_tx)
-        } else {
-            drop(discovery_tx);
-            None
-        };
+        // The first snapshot also tells discovery which interfaces are down.
+        let (ifs, _) = shared.poll_network().await;
+        if cfg.discovery {
+            shared.discovery.restart(discovery::filter_for(&ifs)).await;
+            let rescan = shared.clone();
+            tokio::spawn(async move { localsend::rescan(&rescan).await });
+        }
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (stop_tx, stop_rx) = oneshot::channel();
@@ -341,7 +403,7 @@ impl Backend {
             ls_events_rx,
             discovery_rx,
             stop_rx,
-            Stoppers { ls_stop_tx, ext_server, discovery_stop },
+            Stoppers { ls_stop_tx, ext_server },
         ));
         shared.emit_devices();
         Ok(BackendHandle { cmd_tx, stop_tx: Some(stop_tx), task, ls_port })
@@ -351,7 +413,6 @@ impl Backend {
 struct Stoppers {
     ls_stop_tx: oneshot::Sender<()>,
     ext_server: ExtServerHandle,
-    discovery_stop: Option<oneshot::Sender<()>>,
 }
 
 async fn run(
@@ -364,6 +425,11 @@ async fn run(
 ) {
     let mut tick = tokio::time::interval(Duration::from_secs(30));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Interfaces are re-read every 10 s: a GetAdaptersAddresses call, about
+    // a millisecond. Hints from Windows only make it react sooner.
+    let mut net_tick = tokio::time::interval(Duration::from_secs(10));
+    net_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    net_tick.tick().await;
     loop {
         tokio::select! {
             _ = &mut stop_rx => break,
@@ -371,19 +437,17 @@ async fn run(
             Some(event) = ls_events.recv() => localsend::handle_server_event(&shared, event).await,
             Some(event) = discovery_events.recv() => localsend::handle_discovery_event(&shared, event),
             _ = tick.tick() => {
-                if let Some(discovery) = shared.discovery.get().cloned() {
+                if let Some(discovery) = shared.discovery.current() {
                     tokio::spawn(async move { discovery.announce().await });
                 }
                 shared.emit_devices();
             }
+            _ = net_tick.tick(), if shared.discovery_enabled => {
+                tokio::spawn(discovery::check_network(shared.clone()));
+            }
         }
     }
-    if let Some(stop) = stoppers.discovery_stop {
-        let _ = stop.send(());
-    }
-    if let Some(discovery) = shared.discovery.get() {
-        discovery.wait_stopped().await;
-    }
+    shared.discovery.stop().await;
     stoppers.ext_server.stop().await;
     let _ = stoppers.ls_stop_tx.send(());
     let _ = tokio::time::timeout(Duration::from_secs(2), shared.ls_server.wait_stopped()).await;
@@ -446,6 +510,11 @@ fn handle_command(shared: &Arc<Shared>, cmd: Command) {
         }
         Command::Rescan => {
             tokio::spawn(async move { localsend::rescan(&shared).await });
+        }
+        Command::NetworkChanged(hint) => {
+            if shared.discovery_enabled {
+                discovery::hint(&shared, hint.reason());
+            }
         }
     }
 }

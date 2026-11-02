@@ -7,7 +7,7 @@ mod gui;
 mod logging;
 mod win;
 
-use feathersend_core::backend::{Backend, BackendConfig, EventSink};
+use feathersend_core::backend::{Backend, BackendConfig, Command, EventSink, NetworkHint};
 use feathersend_core::i18n::{Language, fill};
 use feathersend_core::identity::Identity;
 use feathersend_core::settings::{DataDirs, Settings};
@@ -50,6 +50,7 @@ fn run(minimized: bool) -> anyhow::Result<()> {
         let _ = settings.save(&dirs.settings_file);
     }
     let texts = Language::resolve(&settings.language, &system::ui_languages()).texts();
+    logging::set_crash_text(texts.crash_message);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -100,6 +101,10 @@ fn run(minimized: bool) -> anyhow::Result<()> {
         }
     };
     app.set_backend(backend.sender());
+    let hints = backend.sender();
+    win::netwatch::spawn(move || {
+        let _ = hints.send(Command::NetworkChanged(NetworkHint::AddressChange));
+    });
 
     if settings.check_updates {
         let update_queue = queue.clone();
@@ -117,6 +122,13 @@ fn run(minimized: bool) -> anyhow::Result<()> {
                 tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
             }
         });
+    }
+
+    // Manual check of the panic hook (docs/manual-test.md).
+    if std::env::var_os("FEATHERSEND_PANIC_TEST").is_some() {
+        let _ = std::thread::Builder::new()
+            .name("panic-test".into())
+            .spawn(|| panic!("FEATHERSEND_PANIC_TEST is set"));
     }
 
     nwg::dispatch_thread_events();

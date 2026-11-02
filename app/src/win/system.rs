@@ -73,6 +73,24 @@ pub fn open_url(url: &str) {
     }
 }
 
+/// Opens a folder in Explorer, creating it first if it does not exist yet.
+pub fn open_folder(path: &Path) {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    if let Err(e) = std::fs::create_dir_all(path) {
+        tracing::warn!("cannot create {}: {e}", path.display());
+    }
+    unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            wide("open").as_ptr(),
+            wide(&path.to_string_lossy()).as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOW,
+        );
+    }
+}
+
 pub fn computer_name() -> String {
     std::env::var("COMPUTERNAME").unwrap_or_else(|_| "FeatherSend".into())
 }

@@ -30,6 +30,10 @@ unicode-normalization = "0.1"
 png = "0.18"
 uuid = { version = "1", features = ["v4"] }
 mime_guess = "2"
+# Interface list for discovery restarts; the version the LocalSend core uses.
+if-addrs = "0.15"
 
 [dev-dependencies]
 tempfile = "3"
+# Captures log lines in tests; already in the tree through the LocalSend core.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }

@@ -3,7 +3,9 @@
 pub mod clipboard;
 pub mod hotkey;
 pub mod menu;
+pub mod netwatch;
 pub mod system;
+pub mod ui;
 
 use windows_sys::Win32::Foundation::HWND;
 

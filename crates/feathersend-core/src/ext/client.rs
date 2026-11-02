@@ -134,8 +134,14 @@ impl ExtClient {
         let mut file = tokio::fs::File::open(long_path(path)).await.map_err(transport)?;
         file.seek(std::io::SeekFrom::Start(offset)).await.map_err(transport)?;
         let mut sent = offset;
+        let stop = cancel.clone();
         let stream =
             tokio_util::io::ReaderStream::with_capacity(file, UPLOAD_CHUNK).map(move |chunk| {
+                // The connection task polls this and outlives the select below: without
+                // this check the rest of the file still goes out after a cancel.
+                if stop.is_cancelled() {
+                    return Err(std::io::Error::other("cancelled"));
+                }
                 if let Ok(bytes) = &chunk {
                     sent += bytes.len() as u64;
                     progress(sent);
@@ -147,9 +153,11 @@ impl ExtClient {
             .put(format!("{}/transfer/{transfer_id}/{file_id}?offset={offset}", self.base))
             .body(reqwest::Body::wrap_stream(stream))
             .send();
+        // Biased: a cancel also fails the body, and it must not read as a network error.
         let resp = tokio::select! {
-            resp = request => resp.map_err(transport)?,
+            biased;
             _ = cancel.cancelled() => return Err(ExtError::new(0, "cancelled")),
+            resp = request => resp.map_err(transport)?,
         };
         Self::check(resp).await.map(|_| ())
     }
@@ -299,6 +307,28 @@ mod tests {
         let (_, server, client) = setup().await;
         let err = client.clipboard("image/png", vec![0u8; 16 * 1024 * 1024 + 1]).await;
         assert_eq!(err.unwrap_err().status, 413);
+        server.stop().await;
+    }
+
+    #[tokio::test]
+    async fn upload_stops_reading_the_file_once_cancelled() {
+        let (_, server, client) = setup().await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.bin");
+        std::fs::write(&path, vec![7u8; 64 * UPLOAD_CHUNK]).unwrap();
+        let cancel = CancellationToken::new();
+        let (stop, seen) = (cancel.clone(), Arc::new(Mutex::new(0u64)));
+        let s = seen.clone();
+        let progress: Progress = Arc::new(move |n| {
+            *s.lock().unwrap() = n;
+            stop.cancel();
+        });
+        let err = client.upload("t", "f", 0, &path, progress, cancel).await.unwrap_err();
+        assert_eq!((err.status, err.message.as_str()), (0, "cancelled"));
+        // The connection task outlives the call: give it time to read on.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let sent = *seen.lock().unwrap();
+        assert!(sent <= UPLOAD_CHUNK as u64, "kept reading after the cancel: {sent}");
         server.stop().await;
     }
 
