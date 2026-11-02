@@ -6,8 +6,14 @@ use native_windows_gui as nwg;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use windows_sys::Win32::UI::WindowsAndMessaging::{IDCANCEL, WM_COMMAND};
+
+const KEYS_HANDLER: usize = 0x10_002;
 
 type OnSave = Box<dyn Fn(Settings)>;
+
+/// The client area: the controls end 12 units before its right and bottom edges.
+const CLIENT: (u32, u32) = (536, 342);
 
 /// The language list starts with "Automatic", then `Language::ALL`.
 fn language_index(code: &str) -> usize {
@@ -54,13 +60,15 @@ impl SettingsWindow {
         let mut w = SettingsWindow { texts: Some(t), ..Default::default() };
         nwg::Window::builder()
             .title(t.settings_title)
-            .size((540, 360))
+            .size((CLIENT.0 as i32, CLIENT.1 as i32))
             .center(true)
             .icon(Some(icon))
             .parent(Some(parent))
             .flags(nwg::WindowFlags::WINDOW)
             .build(&mut w.window)
             .expect("settings window");
+        // The builder's size includes the title bar and borders; this one does not.
+        w.window.set_size(CLIENT.0, CLIENT.1);
         let label = |out: &mut nwg::Label, text: &str, y: i32| {
             nwg::Label::builder()
                 .parent(&w.window)
@@ -126,14 +134,14 @@ impl SettingsWindow {
         nwg::Button::builder()
             .parent(&w.window)
             .text(t.save)
-            .position((336, 300))
+            .position((334, 300))
             .size((92, 30))
             .build(&mut w.save)
             .unwrap();
         nwg::Button::builder()
             .parent(&w.window)
             .text(t.cancel)
-            .position((434, 300))
+            .position((432, 300))
             .size((92, 30))
             .build(&mut w.cancel)
             .unwrap();
@@ -144,6 +152,20 @@ impl SettingsWindow {
             .unwrap();
 
         let w = Rc::new(w);
+        // Esc reaches the window as IDCANCEL: nwg's message loop runs
+        // IsDialogMessage, which keeps the key from the focused field.
+        let weak = Rc::downgrade(&w);
+        let _ = nwg::bind_raw_event_handler(
+            &w.window.handle,
+            KEYS_HANDLER,
+            move |_hwnd, msg, wparam, _lparam| {
+                if msg != WM_COMMAND || wparam & 0xFFFF != IDCANCEL as usize {
+                    return None;
+                }
+                weak.upgrade()?.window.set_visible(false);
+                Some(0)
+            },
+        );
         let weak = Rc::downgrade(&w);
         nwg::full_bind_event_handler(&w.window.handle, move |event, data, handle| {
             let Some(w) = weak.upgrade() else { return };
@@ -218,6 +240,78 @@ impl SettingsWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_control_sits_inside_the_window_with_a_margin() {
+        use crate::win::{hwnd_of, ui};
+        use windows_sys::Win32::Foundation::{POINT, RECT};
+        use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+        let _guard = ui::NWG_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        nwg::init().unwrap();
+        let mut parent = nwg::Window::default();
+        nwg::Window::builder().flags(nwg::WindowFlags::WINDOW).build(&mut parent).unwrap();
+        let icon = nwg::Icon::default();
+        let w = SettingsWindow::build(&parent, &icon, Language::It.texts());
+
+        let window = hwnd_of(&w.window.handle);
+        let (client_w, client_h) = ui::client_size(window);
+        let margin = ui::px(8);
+        for (name, handle) in [
+            ("alias", &w.alias.handle),
+            ("dir", &w.dir.handle),
+            ("browse", &w.browse.handle),
+            ("lang", &w.lang.handle),
+            ("hotkey", &w.hotkey.handle),
+            ("start_with_windows", &w.start_with_windows.handle),
+            ("check_updates", &w.check_updates.handle),
+            ("accept_unpaired", &w.accept_unpaired.handle),
+            ("save", &w.save.handle),
+            ("cancel", &w.cancel.handle),
+        ] {
+            let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+            let mut corner = POINT { x: 0, y: 0 };
+            unsafe {
+                GetWindowRect(hwnd_of(handle), &mut rect);
+                corner.x = rect.right;
+                corner.y = rect.bottom;
+                ScreenToClient(window, &mut corner);
+            }
+            assert!(corner.x <= client_w - margin, "{name}: right {} of {client_w}", corner.x);
+            assert!(corner.y <= client_h - margin, "{name}: bottom {} of {client_h}", corner.y);
+        }
+    }
+
+    #[test]
+    fn escape_closes_the_window() {
+        use crate::win::{hwnd_of, ui};
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            IsDialogMessageW, IsWindowVisible, MSG, SW_SHOWNA, ShowWindow, WM_KEYDOWN,
+        };
+
+        let _guard = ui::NWG_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        nwg::init().unwrap();
+        let mut parent = nwg::Window::default();
+        nwg::Window::builder().flags(nwg::WindowFlags::WINDOW).build(&mut parent).unwrap();
+        let icon = nwg::Icon::default();
+        let w = SettingsWindow::build(&parent, &icon, Language::It.texts());
+        let window = hwnd_of(&w.window.handle);
+        // Off screen and not activated: this runs on a desktop someone is using.
+        w.window.set_position(-4000, -4000);
+        unsafe { ShowWindow(window, SW_SHOWNA) };
+        assert_ne!(unsafe { IsWindowVisible(window) }, 0);
+
+        // What nwg's message loop does with the key while a field has the focus.
+        let mut msg: MSG = unsafe { std::mem::zeroed() };
+        msg.hwnd = hwnd_of(&w.alias.handle);
+        msg.message = WM_KEYDOWN;
+        msg.wParam = VK_ESCAPE as usize;
+        unsafe { IsDialogMessageW(window, &msg) };
+
+        assert_eq!(unsafe { IsWindowVisible(window) }, 0);
+    }
 
     #[test]
     fn language_list_round_trips_every_code() {
