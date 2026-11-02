@@ -9,7 +9,18 @@ use std::rc::Rc;
 
 type OnSave = Box<dyn Fn(Settings)>;
 
-const LANG_CODES: [&str; 3] = ["auto", "en", "it"];
+/// The language list starts with "Automatic", then `Language::ALL`.
+fn language_index(code: &str) -> usize {
+    Language::ALL.iter().position(|l| l.code().eq_ignore_ascii_case(code)).map_or(0, |i| i + 1)
+}
+
+fn language_code(index: usize) -> String {
+    index
+        .checked_sub(1)
+        .and_then(|i| Language::ALL.get(i))
+        .map_or("auto", |language| language.code())
+        .to_string()
+}
 
 #[derive(Default)]
 pub struct SettingsWindow {
@@ -87,11 +98,11 @@ impl SettingsWindow {
             .parent(&w.window)
             .position((190, 86))
             .size((200, 24))
-            .collection(vec![
-                t.language_auto.to_string(),
-                Language::En.native_name().to_string(),
-                Language::It.native_name().to_string(),
-            ])
+            .collection(
+                std::iter::once(t.language_auto.to_string())
+                    .chain(Language::ALL.iter().map(|l| l.native_name().to_string()))
+                    .collect(),
+            )
             .build(&mut w.lang)
             .unwrap();
         nwg::TextInput::builder()
@@ -165,8 +176,7 @@ impl SettingsWindow {
         *self.on_save.borrow_mut() = Some(on_save);
         self.alias.set_text(&settings.alias);
         self.dir.set_text(&settings.download_dir.to_string_lossy());
-        self.lang
-            .set_selection(LANG_CODES.iter().position(|c| *c == settings.language).or(Some(0)));
+        self.lang.set_selection(Some(language_index(&settings.language)));
         self.hotkey.set_text(&settings.clipboard_hotkey);
         self.start_with_windows.set_check_state(check(autostart));
         self.check_updates.set_check_state(check(settings.check_updates));
@@ -191,7 +201,7 @@ impl SettingsWindow {
         if !dir.is_empty() {
             settings.download_dir = PathBuf::from(dir);
         }
-        settings.language = LANG_CODES[self.lang.selection().unwrap_or(0).min(2)].to_string();
+        settings.language = language_code(self.lang.selection().unwrap_or(0));
         settings.clipboard_hotkey = hotkey;
         settings.start_with_windows =
             self.start_with_windows.check_state() == nwg::CheckBoxState::Checked;
@@ -202,5 +212,20 @@ impl SettingsWindow {
         if let Some(on_save) = self.on_save.borrow().as_ref() {
             on_save(settings);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn language_list_round_trips_every_code() {
+        assert_eq!(language_code(language_index("auto")), "auto");
+        for language in Language::ALL {
+            assert_eq!(language_code(language_index(language.code())), language.code());
+        }
+        assert_eq!(language_index("unknown"), 0);
+        assert_eq!(language_code(99), "auto");
     }
 }

@@ -35,7 +35,9 @@ use the official LocalSend app: no FeatherSend app needed there.
   from where it stopped, automatically or with **Resume**.
 - **You decide**: every incoming transfer and clipboard asks first, unless you turn on automatic
   accept for a paired device. Unpaired LocalSend devices can be refused entirely in **Settings**.
-- Tray icon, optional start with Windows, Italian and English, installer or portable.
+- Tray icon, optional start with Windows, installer or portable.
+- English, Spanish, French, German, Italian, Brazilian Portuguese, Japanese, Korean and
+  Simplified Chinese: follows the Windows language, or choose one in Settings.
 
 ## Download
 

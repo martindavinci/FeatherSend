@@ -133,7 +133,7 @@ impl Settings {
         if self.alias.is_empty() {
             self.alias = "FeatherSend".into();
         }
-        if !matches!(self.language.as_str(), "auto" | "en" | "it") {
+        if self.language != "auto" && crate::i18n::Language::from_code(&self.language).is_none() {
             self.language = "auto".into();
         }
         self
@@ -209,6 +209,18 @@ mod tests {
         assert_eq!(loaded.download_dir, defaults().download_dir);
         loaded.save(&path).unwrap();
         assert_eq!(Settings::load(&path, &defaults()), loaded);
+    }
+
+    #[test]
+    fn language_keeps_every_code_and_drops_unknown_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        for (stored, loaded) in
+            [("pt-BR", "pt-BR"), ("zh-CN", "zh-CN"), ("auto", "auto"), ("xx", "auto")]
+        {
+            std::fs::write(&path, format!(r#"{{"language":"{stored}"}}"#)).unwrap();
+            assert_eq!(Settings::load(&path, &defaults()).language, loaded);
+        }
     }
 
     #[test]

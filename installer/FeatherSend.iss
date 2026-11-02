@@ -1,4 +1,4 @@
-; FeatherSend installer (Inno Setup 6). Per-user: no administrator rights.
+﻿; FeatherSend installer (Inno Setup 6). Per-user: no administrator rights.
 ; Built by `cargo xtask dist`, which passes Version, Arch and SourceExe.
 
 #ifndef Version
@@ -41,11 +41,26 @@ ArchitecturesInstallIn64BitMode=x64
 
 [Languages]
 Name: "en"; MessagesFile: "compiler:Default.isl"
+Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
+Name: "fr"; MessagesFile: "compiler:Languages\French.isl"
+Name: "de"; MessagesFile: "compiler:Languages\German.isl"
 Name: "it"; MessagesFile: "compiler:Languages\Italian.isl"
+Name: "ptbr"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
+Name: "ja"; MessagesFile: "compiler:Languages\Japanese.isl"
+; Not shipped with every Inno Setup 6.x, so kept here (see lang\README.txt).
+Name: "ko"; MessagesFile: "lang\Korean.isl"
+Name: "zhcn"; MessagesFile: "lang\ChineseSimplified.isl"
 
 [CustomMessages]
 en.AutoStart=Start FeatherSend with Windows
+es.AutoStart=Iniciar FeatherSend con Windows
+fr.AutoStart=Démarrer FeatherSend avec Windows
+de.AutoStart=FeatherSend mit Windows starten
 it.AutoStart=Avvia FeatherSend con Windows
+ptbr.AutoStart=Iniciar o FeatherSend com o Windows
+ja.AutoStart=Windows と同時に FeatherSend を起動
+ko.AutoStart=Windows 시작 시 FeatherSend 실행
+zhcn.AutoStart=随 Windows 启动 FeatherSend
 
 [Tasks]
 Name: "autostart"; Description: "{cm:AutoStart}"; Flags: unchecked

@@ -1,23 +1,54 @@
 //! Interface languages and their texts. English is the reference language;
 //! a missing translation is a compile error.
 
+mod de;
 mod en;
+mod es;
+mod fr;
 mod it;
+mod ja;
+mod ko;
+mod pt_br;
+mod zh_cn;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Language {
     En,
+    Es,
+    Fr,
+    De,
     It,
+    PtBr,
+    Ja,
+    Ko,
+    ZhCn,
 }
 
 impl Language {
-    pub const ALL: [Language; 2] = [Language::En, Language::It];
+    pub const ALL: [Language; 9] = [
+        Language::En,
+        Language::Es,
+        Language::Fr,
+        Language::De,
+        Language::It,
+        Language::PtBr,
+        Language::Ja,
+        Language::Ko,
+        Language::ZhCn,
+    ];
 
     /// Code stored in settings.
     pub fn code(self) -> &'static str {
         match self {
             Language::En => "en",
+            Language::Es => "es",
+            Language::Fr => "fr",
+            Language::De => "de",
             Language::It => "it",
+            Language::PtBr => "pt-BR",
+            Language::Ja => "ja",
+            Language::Ko => "ko",
+            Language::ZhCn => "zh-CN",
         }
     }
 
@@ -25,28 +56,55 @@ impl Language {
         Language::ALL.into_iter().find(|l| l.code().eq_ignore_ascii_case(code))
     }
 
-    /// Maps a Windows/BCP 47 tag (`it-IT`, `en_US`) by its language part.
+    /// Maps a Windows/BCP 47 tag (`it-IT`, `zh-Hans-CN`) by its language part:
+    /// every Portuguese variant gets Brazilian Portuguese, every Chinese
+    /// variant Simplified Chinese.
     pub fn from_locale(tag: &str) -> Option<Language> {
-        let primary = tag.split(['-', '_']).next()?;
-        Language::from_code(primary)
+        let primary = tag.split(['-', '_']).next()?.to_ascii_lowercase();
+        Some(match primary.as_str() {
+            "en" => Language::En,
+            "es" => Language::Es,
+            "fr" => Language::Fr,
+            "de" => Language::De,
+            "it" => Language::It,
+            "pt" => Language::PtBr,
+            "ja" => Language::Ja,
+            "ko" => Language::Ko,
+            "zh" => Language::ZhCn,
+            _ => return None,
+        })
     }
 
     /// The language's name in itself.
     pub fn native_name(self) -> &'static str {
         match self {
             Language::En => "English",
+            Language::Es => "Español",
+            Language::Fr => "Français",
+            Language::De => "Deutsch",
             Language::It => "Italiano",
+            Language::PtBr => "Português (Brasil)",
+            Language::Ja => "日本語",
+            Language::Ko => "한국어",
+            Language::ZhCn => "简体中文",
         }
     }
 
     pub fn texts(self) -> &'static Texts {
         match self {
             Language::En => &en::TEXTS,
+            Language::Es => &es::TEXTS,
+            Language::Fr => &fr::TEXTS,
+            Language::De => &de::TEXTS,
             Language::It => &it::TEXTS,
+            Language::PtBr => &pt_br::TEXTS,
+            Language::Ja => &ja::TEXTS,
+            Language::Ko => &ko::TEXTS,
+            Language::ZhCn => &zh_cn::TEXTS,
         }
     }
 
-    /// The setting (`"auto"`, `"en"`, `"it"`) if explicit, else the first
+    /// The setting (`"auto"` or a language code) if explicit, else the first
     /// supported system language, else English.
     pub fn resolve(setting: &str, system: &[String]) -> Language {
         Language::from_code(setting)
@@ -197,12 +255,36 @@ mod tests {
 
     #[test]
     fn resolve_auto_uses_system() {
-        assert_eq!(Language::resolve("auto", &["de-DE".into(), "it-IT".into()]), Language::It);
+        assert_eq!(Language::resolve("auto", &["ru-RU".into(), "it-IT".into()]), Language::It);
+    }
+
+    #[test]
+    fn every_language_is_found_by_its_code_and_its_locale() {
+        for language in Language::ALL {
+            assert_eq!(Language::from_code(language.code()), Some(language));
+            assert_eq!(Language::from_locale(language.code()), Some(language));
+        }
+    }
+
+    #[test]
+    fn locale_variants_map_to_the_language_we_have() {
+        for (tag, language) in [
+            ("de-AT", Language::De),
+            ("es-419", Language::Es),
+            ("fr_CA", Language::Fr),
+            ("pt-PT", Language::PtBr),
+            ("zh-Hans-CN", Language::ZhCn),
+            ("zh-TW", Language::ZhCn),
+            ("ja-JP", Language::Ja),
+            ("ko-KR", Language::Ko),
+        ] {
+            assert_eq!(Language::from_locale(tag), Some(language), "{tag}");
+        }
     }
 
     #[test]
     fn resolve_falls_back_to_en() {
-        assert_eq!(Language::resolve("auto", &["fr-FR".into()]), Language::En);
+        assert_eq!(Language::resolve("auto", &["ru-RU".into()]), Language::En);
     }
 
     #[test]
@@ -228,23 +310,38 @@ mod tests {
             v.sort();
             v
         };
-        let (en, it) = (Language::En.texts(), Language::It.texts());
-        for (a, b) in [
-            (en.incoming_body, it.incoming_body),
-            (en.message_body, it.message_body),
-            (en.clipboard_text_body, it.clipboard_text_body),
-            (en.clipboard_image_body, it.clipboard_image_body),
-            (en.pair_body, it.pair_body),
-            (en.state_failed, it.state_failed),
-            (en.received_notice, it.received_notice),
-            (en.port_in_use, it.port_in_use),
-            (en.about_body, it.about_body),
-            (en.update_available, it.update_available),
-            (en.crash_message, it.crash_message),
-            (en.this_device, it.this_device),
-            (en.update_status, it.update_status),
-        ] {
-            assert_eq!(placeholders(a), placeholders(b), "{a}");
+        let fields = |t: &'static Texts| {
+            [
+                t.state_failed,
+                t.incoming_body,
+                t.incoming_more,
+                t.message_body,
+                t.clipboard_text_body,
+                t.clipboard_image_body,
+                t.clipboard_received,
+                t.pair_body,
+                t.pair_ok,
+                t.pair_failed,
+                t.pair_needs_feathersend,
+                t.unpair_confirm,
+                t.received_notice,
+                t.sent_notice,
+                t.declined,
+                t.busy,
+                t.port_in_use,
+                t.update_available,
+                t.about_body,
+                t.crash_message,
+                t.this_device,
+                t.open_folder_failed,
+                t.update_status,
+            ]
+        };
+        let english = fields(Language::En.texts());
+        for language in Language::ALL {
+            for (a, b) in english.iter().zip(fields(language.texts())) {
+                assert_eq!(placeholders(a), placeholders(b), "{}: {b}", language.code());
+            }
         }
     }
 }

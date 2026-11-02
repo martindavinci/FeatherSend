@@ -20,7 +20,8 @@ First release.
 - This PC's name, address and port in a status bar.
 - Device icons (phone or computer, paired, offline), hints in empty lists and "Open received folder".
 - Buttons enabled only when they apply to the selected device or transfer.
-- Tray icon, start with Windows, Italian and English interface.
+- Tray icon, start with Windows.
+- Interface in English, Spanish, French, German, Italian, Brazilian Portuguese, Japanese, Korean and Simplified Chinese. It follows the Windows language, or you choose one in Settings.
 - Update check, with a balloon and the status bar when a new version is out.
 - A log that writes repeated warnings once every 10 minutes with a count, and records crashes with a message saying where to find them.
 - Windows 7 SP1+ builds for x64 and x86, installer and portable zip.

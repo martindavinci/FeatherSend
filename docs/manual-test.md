@@ -76,5 +76,6 @@ Keep the phone's LocalSend open on the same Wi-Fi.
 ## Settings
 
 - [ ] Change download folder, hotkey, start with Windows; restart keeps them.
-- [ ] Language Italian/English after restart.
+- [ ] Language: Automatic follows the Windows display language; each of the 9 languages in Settings applies after restart, including Japanese, Korean and Chinese on a PC with no East Asian language pack (Windows 7 too: text must not show as boxes).
+- [ ] Installer: offers the 9 languages and picks the Windows one.
 - [ ] "Let unpaired LocalSend devices ask" off: the phone is refused without a prompt.

@@ -1194,3 +1194,79 @@ impl Drop for App {
         }
     }
 }
+
+#[cfg(test)]
+mod text_fit_tests {
+    use super::*;
+    use feathersend_core::i18n::Language;
+    use windows_sys::Win32::Foundation::SIZE;
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetDC, GetTextExtentPoint32W, ReleaseDC, SelectObject,
+    };
+
+    fn font(weight: u32) -> nwg::Font {
+        let mut font = nwg::Font::default();
+        nwg::Font::builder().family("Segoe UI").size(16).weight(weight).build(&mut font).unwrap();
+        font
+    }
+
+    fn width(font: &nwg::Font, text: &str) -> i32 {
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        let mut size = SIZE { cx: 0, cy: 0 };
+        unsafe {
+            let dc = GetDC(std::ptr::null_mut());
+            let old = SelectObject(dc, font.handle as _);
+            GetTextExtentPoint32W(dc, wide.as_ptr(), wide.len() as i32, &mut size);
+            SelectObject(dc, old);
+            ReleaseDC(std::ptr::null_mut(), dc);
+        }
+        size.cx
+    }
+
+    /// Control sizes in logical units, with room for the control's own edges.
+    #[test]
+    fn every_label_fits_its_control_in_every_language() {
+        let _guard = ui::NWG_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        nwg::init().unwrap();
+        let (regular, bold) = (font(400), font(700));
+        let side = layout::SIDE_W - 12;
+        let mut overflow = Vec::new();
+        for language in Language::ALL {
+            let t = language.texts();
+            let checks = [
+                (&bold, t.send_files, side),
+                (&regular, t.send_folder, side),
+                (&regular, t.send_clipboard, side),
+                (&regular, t.pair, side),
+                (&regular, t.add_by_ip, side),
+                (&regular, t.cancel, side),
+                (&regular, t.resume, side),
+                (&regular, t.open_received, side),
+                (&regular, t.settings, side),
+                (&regular, t.about, side),
+                (&regular, t.alias_label, 170),
+                (&regular, t.download_dir_label, 170),
+                (&regular, t.language_label, 170),
+                (&regular, t.hotkey_label, 170),
+                (&regular, t.browse, 88 - 12),
+                (&regular, t.save, 92 - 12),
+                (&regular, t.cancel, 92 - 12),
+                (&regular, t.start_with_windows, 512 - 20),
+                (&regular, t.check_updates, 512 - 20),
+                (&regular, t.accept_unpaired, 512 - 20),
+                (&regular, t.update_status, UPDATE_PART_W - 16),
+            ];
+            for (font, text, room) in checks {
+                let needed = width(font, text);
+                if needed > ui::px(room) {
+                    overflow.push(format!(
+                        "{}: {text} ({needed} > {})",
+                        language.code(),
+                        ui::px(room)
+                    ));
+                }
+            }
+        }
+        assert!(overflow.is_empty(), "{}", overflow.join("\n"));
+    }
+}
