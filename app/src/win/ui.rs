@@ -18,9 +18,9 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::UI::Controls::{
     CDDS_POSTPAINT, CDDS_PREPAINT, CDRF_DODEFAULT, CDRF_NOTIFYPOSTPAINT, ILC_COLOR32, ILC_MASK,
-    ImageList_Create, ImageList_ReplaceIcon, LVHITTESTINFO, LVM_GETHEADER,
-    LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SUBITEMHITTEST, LVS_EX_DOUBLEBUFFER, NMCUSTOMDRAW, NMHDR,
-    NMMOUSE, SB_SETPARTS, SetWindowTheme,
+    ImageList_Create, ImageList_ReplaceIcon, LVHITTESTINFO, LVIS_FOCUSED, LVIS_SELECTED, LVITEMW,
+    LVM_GETHEADER, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE, LVM_SUBITEMHITTEST,
+    LVS_EX_DOUBLEBUFFER, NMCUSTOMDRAW, NMHDR, NMMOUSE, SB_SETPARTS, SetWindowTheme,
 };
 use windows_sys::Win32::UI::Shell::{
     DragAcceptFiles, DragFinish, DragQueryFileW, DragQueryPoint, HDROP,
@@ -99,6 +99,20 @@ pub fn modern_list(hwnd: HWND) {
             LVS_EX_DOUBLEBUFFER as LPARAM,
         );
     }
+}
+
+/// Selects a row and moves the keyboard position to it, or clears the
+/// selection and leaves the keyboard position where it is.
+pub fn list_select(list: HWND, row: Option<usize>) {
+    let both = LVIS_SELECTED | LVIS_FOCUSED;
+    let (index, state, mask) = match row {
+        Some(row) => (row, both, both),
+        None => (usize::MAX, 0, LVIS_SELECTED),
+    };
+    let mut item: LVITEMW = unsafe { std::mem::zeroed() };
+    item.state = state;
+    item.stateMask = mask;
+    unsafe { SendMessageW(list, LVM_SETITEMSTATE, index, &item as *const LVITEMW as LPARAM) };
 }
 
 /// Makes a child window accept dropped files itself: `WM_DROPFILES` then goes

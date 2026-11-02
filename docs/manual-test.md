@@ -34,6 +34,7 @@ Check on Windows 7 too: theme, icons and buttons draw through different code the
 - [ ] Drop outside the rows (transfer list, buttons, empty part of the device list): selected online device; with none selected and one online, that one; with several online, a menu at the cursor; with none online, the message.
 - [ ] GDI objects (Task Manager column) stay flat, under about 200, while dragging the window edge for 30 s.
 - [ ] Maximize, restore and Win+Up: lists, columns and buttons follow the window every time.
+- [ ] During a transfer, with enough rows to scroll: the list stays where you scrolled it and the arrow keys continue from the selected row. The selected row stays selected, also when rows move. Removing the last row brings the empty hint back.
 - [ ] Update notice, on a build older than the latest release: balloon and status bar text; clicking either opens the release page; **About** offers it too; no prompt at startup.
 
 ## Network changes

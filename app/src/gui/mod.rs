@@ -5,6 +5,7 @@
 mod icons;
 mod input;
 mod layout;
+mod rows;
 mod settings;
 mod view;
 
@@ -135,16 +136,6 @@ fn column(list: &nwg::ListView, index: i32, text: &str, width: i32) {
         width: Some(width),
         text: Some(text.to_string()),
     });
-}
-
-fn cell(list: &nwg::ListView, row: i32, col: i32, text: String) {
-    let item = nwg::InsertListViewItem {
-        index: Some(row),
-        column_index: col,
-        text: Some(text),
-        ..Default::default()
-    };
-    if col == 0 { list.insert_item(item) } else { list.update_item(row as usize, item) }
 }
 
 impl App {
@@ -583,26 +574,21 @@ impl App {
     fn refresh_devices(&self, selected: Option<String>) {
         let t = self.t();
         let state = self.state.borrow();
-        self.devices.set_redraw(false);
-        self.devices.clear();
-        for (row, d) in state.devices.iter().enumerate() {
-            let row = row as i32;
-            self.devices.insert_item(nwg::InsertListViewItem {
-                index: Some(row),
-                column_index: 0,
-                text: Some(d.alias.clone()),
+        let list: Vec<rows::Row> = state
+            .devices
+            .iter()
+            .map(|d| rows::Row {
                 image: Some(icons::device_icon_index(d)),
-            });
-            cell(&self.devices, row, 1, d.address.clone().unwrap_or_default());
-            cell(&self.devices, row, 2, view::device_status(t, d));
-        }
-        if let Some(fp) = selected
-            && let Some(i) = state.devices.iter().position(|d| d.fingerprint == fp)
-        {
-            self.devices.select_item(i, true);
-        }
-        self.devices.set_redraw(true);
+                cells: vec![
+                    d.alias.clone(),
+                    d.address.clone().unwrap_or_default(),
+                    view::device_status(t, d),
+                ],
+            })
+            .collect();
+        let row = selected.and_then(|fp| state.devices.iter().position(|d| d.fingerprint == fp));
         drop(state);
+        rows::sync(&self.devices, &list, row);
         self.fit_columns();
         self.update_actions();
     }
@@ -930,20 +916,14 @@ impl App {
     fn refresh_transfers(&self, selected: Option<u64>) {
         let t = self.t();
         let state = self.state.borrow();
-        self.transfers.set_redraw(false);
-        self.transfers.clear();
-        for (row, v) in state.transfers.iter().enumerate() {
-            for (col, text) in view::transfer_cells(t, v).into_iter().enumerate() {
-                cell(&self.transfers, row as i32, col as i32, text);
-            }
-        }
-        if let Some(id) = selected
-            && let Some(i) = state.transfers.iter().position(|v| v.id == id)
-        {
-            self.transfers.select_item(i, true);
-        }
-        self.transfers.set_redraw(true);
+        let list: Vec<rows::Row> = state
+            .transfers
+            .iter()
+            .map(|v| rows::Row { image: None, cells: view::transfer_cells(t, v).into() })
+            .collect();
+        let row = selected.and_then(|id| state.transfers.iter().position(|v| v.id == id));
         drop(state);
+        rows::sync(&self.transfers, &list, row);
         self.fit_columns();
         self.update_actions();
     }
